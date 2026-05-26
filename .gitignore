@@ -1,0 +1,5 @@
+downloads/
+*.zip
+sub2api-usage.widget/config.json
+native-widget/Sub2APIUsageWidget
+.DS_Store

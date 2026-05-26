@@ -1,0 +1,4 @@
+{
+  "baseUrl": "https://your-sub2api.example.com",
+  "chromeUrlMatch": "your-sub2api.example.com"
+}
