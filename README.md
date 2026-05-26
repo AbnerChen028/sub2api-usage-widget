@@ -1,5 +1,7 @@
 # Sub2API Usage Desktop Widget
 
+[中文文档](README.zh-CN.md)
+
 A tiny macOS desktop widget for monitoring today's Sub2API usage:
 
 - total requests
