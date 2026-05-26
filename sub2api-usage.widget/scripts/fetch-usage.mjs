@@ -14,7 +14,7 @@ const WIDGET_DIR = resolve(SCRIPT_DIR, "..");
 const KEYCHAIN_SERVICE = "sub2api-usage-widget";
 
 export const DEFAULT_CONFIG = {
-  baseUrl: "https://sub2api.example.com",
+  baseUrl: "",
 };
 
 export function normalizeBaseUrl(value) {
@@ -66,6 +66,16 @@ export function buildStatsUrl(day, baseUrl = DEFAULT_CONFIG.baseUrl, mode = "ran
   url.searchParams.set("start_date", day);
   url.searchParams.set("end_date", day);
   return url.toString();
+}
+
+async function resolveBaseUrl(config, readSecret) {
+  const configuredBaseUrl = normalizeBaseUrl(config?.baseUrl);
+  if (configuredBaseUrl) return configuredBaseUrl;
+
+  const savedBaseUrl = normalizeBaseUrl(await readSecret("base_url"));
+  if (savedBaseUrl) return savedBaseUrl;
+
+  throw createCredentialError("缺少 Sub2API 服务地址。请输入服务地址、邮箱和密码。");
 }
 
 export function parseSecretValue(stdout) {
@@ -227,7 +237,7 @@ export async function fetchStatsWithIndependentAuth({
   refreshToken = refreshAccessToken,
   requestJSON = requestStats,
 } = {}) {
-  const baseUrl = normalizeBaseUrl(config?.baseUrl || DEFAULT_CONFIG.baseUrl);
+  const baseUrl = await resolveBaseUrl(config, readSecret);
 
   const accessToken = await readSecret("access_token");
   if (accessToken) {

@@ -11,8 +11,8 @@
    ~/Library/Application Support/Übersicht/widgets/
    ```
 
-3. Copy `config.example.json` to `config.json` and set your Sub2API domain.
-4. On first native-widget launch, enter your Sub2API email and password in the macOS dialog. For shell-only setup, run `./scripts/configure-credentials.sh` from the repository root.
+3. On first native-widget launch, enter your Sub2API service address, email, and password in the macOS dialog.
+4. Optional: create `config.json` with `baseUrl` if you want a file-based service-address override.
 
 ## Test
 

@@ -74,7 +74,7 @@ final class WidgetContentView: NSView {
         background.lineWidth = 1.4
         background.stroke()
 
-        drawText("Sub2API 今日用量", x: 20, y: 18, width: 230, height: 28, size: 25, weight: .bold, color: .white)
+        drawText("今日Token用量", x: 20, y: 18, width: 230, height: 28, size: 25, weight: .bold, color: .white)
         drawCircle(x: bounds.width - 42, y: 29, radius: 8, color: payload.ok ? .systemGreen : .systemPink)
         drawText("\(payload.day ?? "今日") · \(formatTime(payload.fetchedAt)) 更新", x: 21, y: 52, width: bounds.width - 42, height: 18, size: 12, weight: .regular, color: NSColor(calibratedWhite: 0.82, alpha: 0.82))
 
@@ -139,17 +139,20 @@ final class WidgetContentView: NSView {
         guard !isCredentialPromptVisible else { return }
         isCredentialPromptVisible = true
 
+        let baseUrlField = NSTextField(frame: NSRect(x: 0, y: 68, width: 300, height: 24))
+        baseUrlField.placeholderString = "服务地址，例如 https://sub2api.example.com"
         let emailField = NSTextField(frame: NSRect(x: 0, y: 34, width: 300, height: 24))
         emailField.placeholderString = "邮箱"
         let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
         passwordField.placeholderString = "密码"
-        let stack = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 58))
+        let stack = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 92))
+        stack.addSubview(baseUrlField)
         stack.addSubview(emailField)
         stack.addSubview(passwordField)
 
         let alert = NSAlert()
-        alert.messageText = "配置 Sub2API 登录凭据"
-        alert.informativeText = "凭据会保存到 macOS Keychain。密码修改或登录失效时，会再次提示你更新。"
+        alert.messageText = "配置 Sub2API"
+        alert.informativeText = "服务地址和登录凭据会保存到 macOS Keychain。地址或密码修改、登录失效时，会再次提示你更新。"
         alert.accessoryView = stack
         alert.addButton(withTitle: "保存并刷新")
         alert.addButton(withTitle: "取消")
@@ -160,15 +163,17 @@ final class WidgetContentView: NSView {
         isCredentialPromptVisible = false
 
         guard response == .alertFirstButtonReturn else { return }
+        let baseUrl = normalizedBaseUrl(baseUrlField.stringValue)
         let email = emailField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let password = passwordField.stringValue
-        guard !email.isEmpty, !password.isEmpty else {
-            payload = UsagePayload(ok: false, day: nil, fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, needsCredentials: true, error: "邮箱和密码不能为空。双击卡片可重新输入。")
+        guard !baseUrl.isEmpty, !email.isEmpty, !password.isEmpty else {
+            payload = UsagePayload(ok: false, day: nil, fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, needsCredentials: true, error: "服务地址、邮箱和密码不能为空。双击卡片可重新输入。")
             needsDisplay = true
             return
         }
 
         do {
+            try saveCredential(account: "base_url", value: baseUrl)
             try saveCredential(account: "email", value: email)
             try saveCredential(account: "password", value: password)
             deleteCredential(account: "access_token")
@@ -180,6 +185,14 @@ final class WidgetContentView: NSView {
             payload = UsagePayload(ok: false, day: nil, fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, needsCredentials: true, error: "保存凭据失败：\(error.localizedDescription)")
             needsDisplay = true
         }
+    }
+
+    private func normalizedBaseUrl(_ value: String) -> String {
+        var text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        while text.hasSuffix("/") {
+            text.removeLast()
+        }
+        return text
     }
 
     private func saveCredential(account: String, value: String) throws {

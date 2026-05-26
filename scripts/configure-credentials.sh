@@ -3,6 +3,13 @@ set -euo pipefail
 
 SERVICE="sub2api-usage-widget"
 
+read -r -p "Sub2API base URL: " BASE_URL
+BASE_URL="${BASE_URL%/}"
+if [[ -z "$BASE_URL" ]]; then
+  echo "Base URL is required." >&2
+  exit 1
+fi
+
 read -r -p "Sub2API email: " EMAIL
 if [[ -z "$EMAIL" ]]; then
   echo "Email is required." >&2
@@ -16,6 +23,7 @@ if [[ -z "$PASSWORD" ]]; then
   exit 1
 fi
 
+security add-generic-password -U -s "$SERVICE" -a "base_url" -w "$BASE_URL"
 security add-generic-password -U -s "$SERVICE" -a "email" -w "$EMAIL"
 security add-generic-password -U -s "$SERVICE" -a "password" -w "$PASSWORD"
 

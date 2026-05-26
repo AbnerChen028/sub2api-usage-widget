@@ -60,7 +60,7 @@ export const render = ({ output, error }) => {
     <div className="card">
       <div className="header">
         <div>
-          <div className="title">Sub2API 今日用量</div>
+          <div className="title">今日Token用量</div>
           <div className="subtitle">{data.day || "今日"} · {formatTime(data.fetchedAt)} 更新</div>
         </div>
         <div className={data.ok ? "status ok" : "status bad"} />

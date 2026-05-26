@@ -23,7 +23,7 @@ test("formatShanghaiDate returns the Asia/Shanghai calendar day", () => {
 });
 
 test("buildStatsUrl includes the selected date range", () => {
-  const url = buildStatsUrl("2026-05-26", DEFAULT_CONFIG.baseUrl);
+  const url = buildStatsUrl("2026-05-26", "https://sub2api.example.com");
 
   assert.equal(
     url,
@@ -105,7 +105,7 @@ test("fetchStatsWithIndependentAuth uses cached access token first", async () =>
   const result = await fetchStatsWithIndependentAuth({
     day: "2026-05-26",
     config: {
-      baseUrl: DEFAULT_CONFIG.baseUrl,
+      baseUrl: "https://sub2api.example.com",
     },
     readSecret: async (account) => {
       if (account === "access_token") return "cached-token";
@@ -144,7 +144,7 @@ test("fetchStatsWithIndependentAuth refreshes tokens after authorization failure
   const result = await fetchStatsWithIndependentAuth({
     day: "2026-05-26",
     config: {
-      baseUrl: DEFAULT_CONFIG.baseUrl,
+      baseUrl: "https://sub2api.example.com",
     },
     readSecret: async (account) => {
       if (account === "access_token") return "expired-token";
@@ -194,7 +194,7 @@ test("fetchStatsWithIndependentAuth logs in with Keychain credentials when no to
   const result = await fetchStatsWithIndependentAuth({
     day: "2026-05-26",
     config: {
-      baseUrl: DEFAULT_CONFIG.baseUrl,
+      baseUrl: "https://sub2api.example.com",
     },
     readSecret: async (account) => {
       if (account === "email") return "admin@example.com";
@@ -233,6 +233,65 @@ test("fetchStatsWithIndependentAuth logs in with Keychain credentials when no to
   assert.equal(saved.get("refresh_token"), "login-refresh-token");
   assert.equal(result.tokenSource, "login");
   assert.equal(result.stats.totalRequests, 12);
+});
+
+test("fetchStatsWithIndependentAuth reads base URL from Keychain", async () => {
+  let requestedUrl = "";
+
+  const result = await fetchStatsWithIndependentAuth({
+    day: "2026-05-26",
+    config: {},
+    readSecret: async (account) => {
+      if (account === "base_url") return "https://custom.example.com/";
+      if (account === "access_token") return "cached-token";
+      return null;
+    },
+    writeSecret: async () => {
+      throw new Error("token should not be written");
+    },
+    login: async () => {
+      throw new Error("login should not be used when access token works");
+    },
+    refreshToken: async () => {
+      throw new Error("refresh should not be used when access token works");
+    },
+    requestJSON: async (url) => {
+      requestedUrl = url;
+      return {
+        total_requests: 13,
+        total_tokens: 26,
+        total_cache_tokens: 8,
+        total_actual_cost: 0.78,
+      };
+    },
+  });
+
+  assert.equal(
+    requestedUrl,
+    "https://custom.example.com/api/v1/usage/stats?start_date=2026-05-26&end_date=2026-05-26",
+  );
+  assert.equal(result.stats.totalRequests, 13);
+});
+
+test("fetchStatsWithIndependentAuth asks for configuration when base URL is missing", async () => {
+  await assert.rejects(
+    fetchStatsWithIndependentAuth({
+      day: "2026-05-26",
+      config: {},
+      readSecret: async () => null,
+      writeSecret: async () => {},
+      login: async () => {
+        throw new Error("login should not be used without base URL");
+      },
+      refreshToken: async () => {
+        throw new Error("refresh should not be used without base URL");
+      },
+      requestJSON: async () => {
+        throw new Error("stats should not be requested without base URL");
+      },
+    }),
+    (error) => error.needsCredentials === true && error.message.includes("服务地址"),
+  );
 });
 
 test("CLI marks missing credentials as needing credential input", async () => {

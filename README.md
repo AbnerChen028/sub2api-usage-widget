@@ -28,28 +28,16 @@ xcode-select --install
 
 ## Configure
 
-Copy the example config:
+On first launch, the native widget prompts for your Sub2API service address, email, and password in a macOS dialog.
+The service address is your Sub2API site origin, for example `https://your-sub2api.example.com`.
 
-```bash
-cp sub2api-usage.widget/config.example.json sub2api-usage.widget/config.json
-```
+The service address and credentials are stored in Keychain service `sub2api-usage-widget`.
+The widget then logs in directly, stores `access_token` and `refresh_token` in the same Keychain service,
+and refreshes tokens automatically. Secrets are not written to the repository config.
 
-Edit `sub2api-usage.widget/config.json`:
+Advanced users can still create `sub2api-usage.widget/config.json` with a `baseUrl` value to override the Keychain service address.
 
-```json
-{
-  "baseUrl": "https://your-sub2api.example.com"
-}
-```
-
-`baseUrl` is your Sub2API site origin.
-
-On first launch, the native widget prompts for your Sub2API email and password in a macOS dialog.
-Credentials are stored in Keychain service `sub2api-usage-widget`; the widget then logs in directly,
-stores `access_token` and `refresh_token` in the same Keychain service, and refreshes tokens automatically.
-Credentials and tokens are not written to the repository config.
-
-If the password later changes or login fails, the widget prompts again and overwrites the saved credentials.
+If the service address or password later changes, or login fails, the widget prompts again and overwrites the saved values.
 If you cancel the prompt, double-click the widget to retry.
 
 For headless setup or troubleshooting, you can still save credentials from a shell:
