@@ -69,6 +69,44 @@ Build and start the native widget:
 
 The widget refreshes every 5 minutes. You can drag it by its background.
 
+## Start Automatically After Login
+
+Install the widget as a macOS LaunchAgent:
+
+```bash
+./scripts/install-launch-agent.sh
+```
+
+The installer builds the native widget, copies the runtime files to:
+
+```text
+~/Library/Application Support/Sub2APIUsageWidget
+```
+
+and registers:
+
+```text
+~/Library/LaunchAgents/com.abnerchen.sub2api-usage-widget.plist
+```
+
+After installation, macOS starts the widget when you log in. To restart it manually:
+
+```bash
+launchctl kickstart -k "gui/$(id -u)/com.abnerchen.sub2api-usage-widget"
+```
+
+To disable auto-start:
+
+```bash
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.abnerchen.sub2api-usage-widget.plist"
+```
+
+Launch logs are written to:
+
+```text
+~/Library/Application Support/Sub2APIUsageWidget/logs
+```
+
 ## Test Fetching
 
 Run the fetch script directly:

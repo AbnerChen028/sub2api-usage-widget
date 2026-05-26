@@ -187,7 +187,12 @@ export async function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+export function isDirectRun(importMetaUrl, argvPath) {
+  if (!argvPath) return false;
+  return fileURLToPath(importMetaUrl) === resolve(argvPath);
+}
+
+if (isDirectRun(import.meta.url, process.argv[1])) {
   const result = await main();
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }

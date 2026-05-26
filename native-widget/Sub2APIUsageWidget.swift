@@ -11,6 +11,24 @@ struct UsagePayload: Decodable {
     let error: String?
 }
 
+enum WidgetRefreshError: LocalizedError {
+    case emptyOutput
+    case invalidJSON(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyOutput:
+            return "刷新没有返回数据。请确认 Chrome 已打开 Sub2API 页面并保持登录，然后双击卡片刷新。"
+        case .invalidJSON(let output):
+            let text = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.isEmpty {
+                return "刷新没有返回数据。请确认 Chrome 已打开 Sub2API 页面并保持登录，然后双击卡片刷新。"
+            }
+            return "刷新返回格式异常：\(String(text.prefix(180)))"
+        }
+    }
+}
+
 final class WidgetContentView: NSView {
     private let scriptPath: String
     private var timer: Timer?
@@ -34,6 +52,12 @@ final class WidgetContentView: NSView {
     override var isFlipped: Bool { true }
 
     override func mouseDown(with event: NSEvent) {
+        if event.clickCount >= 2 {
+            payload = UsagePayload(ok: false, day: "今日", fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, error: "正在刷新...")
+            needsDisplay = true
+            refresh()
+            return
+        }
         window?.performDrag(with: event)
     }
 
@@ -80,7 +104,16 @@ final class WidgetContentView: NSView {
                 try process.run()
                 process.waitUntilExit()
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let nextPayload = try JSONDecoder().decode(UsagePayload.self, from: data)
+                let output = String(data: data, encoding: .utf8) ?? ""
+                guard !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw WidgetRefreshError.emptyOutput
+                }
+                let nextPayload: UsagePayload
+                do {
+                    nextPayload = try JSONDecoder().decode(UsagePayload.self, from: data)
+                } catch {
+                    throw WidgetRefreshError.invalidJSON(output)
+                }
                 DispatchQueue.main.async {
                     self.payload = nextPayload
                     if nextPayload.ok {

@@ -8,6 +8,7 @@ import {
   DEFAULT_CONFIG,
   extractStats,
   formatShanghaiDate,
+  isDirectRun,
   normalizeBaseUrl,
   parseChromeAuthToken,
   toChromeAuthErrorMessage,
@@ -94,6 +95,16 @@ test("toChromeAuthErrorMessage explains blocked Chrome JavaScript automation", (
   assert.equal(
     message,
     "需要在 Chrome 打开并登录 Sub2API，且开启 View > Developer > Allow JavaScript from Apple Events。",
+  );
+});
+
+test("isDirectRun handles script paths containing spaces", () => {
+  assert.equal(
+    isDirectRun(
+      "file:///Users/example/Library/Application%20Support/Sub2APIUsageWidget/sub2api-usage.widget/scripts/fetch-usage.mjs",
+      "/Users/example/Library/Application Support/Sub2APIUsageWidget/sub2api-usage.widget/scripts/fetch-usage.mjs",
+    ),
+    true,
   );
 });
 
