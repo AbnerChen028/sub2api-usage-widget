@@ -12,7 +12,7 @@
    ```
 
 3. Copy `config.example.json` to `config.json` and set your Sub2API domain.
-4. Run `./scripts/configure-credentials.sh` from the repository root to save your Sub2API email and password to macOS Keychain.
+4. On first native-widget launch, enter your Sub2API email and password in the macOS dialog. For shell-only setup, run `./scripts/configure-credentials.sh` from the repository root.
 
 ## Test
 

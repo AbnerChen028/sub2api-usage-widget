@@ -91,6 +91,12 @@ export function extractStats(payload) {
   };
 }
 
+function createCredentialError(message) {
+  const error = new Error(message);
+  error.needsCredentials = true;
+  return error;
+}
+
 async function readKeychainSecret(account) {
   try {
     const { stdout } = await execFileAsync(
@@ -256,15 +262,20 @@ export async function fetchStatsWithIndependentAuth({
   const email = await readSecret("email");
   const password = await readSecret("password");
   if (!email || !password) {
-    throw new Error("缺少 Sub2API 登录凭据。请先运行 scripts/configure-credentials.sh 保存邮箱和密码。");
+    throw createCredentialError("缺少 Sub2API 登录凭据。请输入邮箱和密码。");
   }
 
-  const loginResult = await login(baseUrl, { email, password });
+  let loginResult;
+  try {
+    loginResult = await login(baseUrl, { email, password });
+  } catch (error) {
+    throw createCredentialError(`登录失败，请重新输入 Sub2API 邮箱和密码。${error?.message ? `(${error.message})` : ""}`);
+  }
   if (loginResult?.requires_2fa) {
-    throw new Error("当前账号开启了 2FA，小组件暂不支持独立完成二次验证。建议为挂件准备一个只读管理员账号。");
+    throw createCredentialError("当前账号开启了 2FA，小组件暂不支持独立完成二次验证。建议为挂件准备一个只读管理员账号。");
   }
   if (!loginResult?.access_token) {
-    throw new Error("登录成功但没有返回 access_token。");
+    throw createCredentialError("登录成功但没有返回 access_token，请重新确认账号权限。");
   }
 
   await saveAuthTokens(writeSecret, loginResult);
@@ -293,6 +304,7 @@ export async function main() {
       ok: false,
       day,
       fetchedAt,
+      needsCredentials: error?.needsCredentials === true,
       error: error?.message || String(error),
     };
   }

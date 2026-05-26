@@ -44,15 +44,19 @@ Edit `sub2api-usage.widget/config.json`:
 
 `baseUrl` is your Sub2API site origin.
 
-Save your Sub2API login credentials to macOS Keychain:
+On first launch, the native widget prompts for your Sub2API email and password in a macOS dialog.
+Credentials are stored in Keychain service `sub2api-usage-widget`; the widget then logs in directly,
+stores `access_token` and `refresh_token` in the same Keychain service, and refreshes tokens automatically.
+Credentials and tokens are not written to the repository config.
+
+If the password later changes or login fails, the widget prompts again and overwrites the saved credentials.
+If you cancel the prompt, double-click the widget to retry.
+
+For headless setup or troubleshooting, you can still save credentials from a shell:
 
 ```bash
 ./scripts/configure-credentials.sh
 ```
-
-The script stores `email` and `password` in Keychain service `sub2api-usage-widget`.
-The widget then logs in directly, stores `access_token` and `refresh_token` in the same Keychain service,
-and refreshes tokens automatically. Credentials and tokens are not written to the repository config.
 
 ## Run
 
@@ -62,7 +66,7 @@ Build and start the native widget:
 ./scripts/run-native-widget.sh
 ```
 
-The widget refreshes every 5 minutes. You can drag it by its background.
+The widget refreshes every 5 minutes. You can drag it by its background and double-click it to refresh immediately.
 
 ## Start Automatically After Login
 

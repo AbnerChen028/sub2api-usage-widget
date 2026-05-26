@@ -235,6 +235,19 @@ test("fetchStatsWithIndependentAuth logs in with Keychain credentials when no to
   assert.equal(result.stats.totalRequests, 12);
 });
 
+test("CLI marks missing credentials as needing credential input", async () => {
+  const { stdout } = await execFileAsync("node", ["scripts/fetch-usage.mjs"], {
+    cwd: new URL("..", import.meta.url),
+    timeout: 15_000,
+  });
+
+  const result = JSON.parse(stdout);
+
+  if (!result.ok && result.error.includes("缺少 Sub2API 登录凭据")) {
+    assert.equal(result.needsCredentials, true);
+  }
+});
+
 test("CLI always prints parseable JSON", async () => {
   const { stdout } = await execFileAsync("node", ["scripts/fetch-usage.mjs"], {
     cwd: new URL("..", import.meta.url),

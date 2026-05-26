@@ -8,6 +8,7 @@ struct UsagePayload: Decodable {
     let totalTokens: Double?
     let totalCacheTokens: Double?
     let totalActualCost: Double?
+    let needsCredentials: Bool?
     let error: String?
 }
 
@@ -18,11 +19,11 @@ enum WidgetRefreshError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .emptyOutput:
-            return "刷新没有返回数据。请先运行 scripts/configure-credentials.sh 保存 Sub2API 登录凭据，然后双击卡片刷新。"
+            return "刷新没有返回数据。请双击卡片重新刷新。"
         case .invalidJSON(let output):
             let text = output.trimmingCharacters(in: .whitespacesAndNewlines)
             if text.isEmpty {
-                return "刷新没有返回数据。请先运行 scripts/configure-credentials.sh 保存 Sub2API 登录凭据，然后双击卡片刷新。"
+                return "刷新没有返回数据。请双击卡片重新刷新。"
             }
             return "刷新返回格式异常：\(String(text.prefix(180)))"
         }
@@ -32,8 +33,9 @@ enum WidgetRefreshError: LocalizedError {
 final class WidgetContentView: NSView {
     private let scriptPath: String
     private var timer: Timer?
-    private var payload = UsagePayload(ok: false, day: "今日", fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, error: "正在刷新...")
+    private var payload = UsagePayload(ok: false, day: "今日", fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, needsCredentials: nil, error: "正在刷新...")
     private var usageStatus = ("正在刷新今日用量", NSColor.systemGreen)
+    private var isCredentialPromptVisible = false
 
     init(frame: NSRect, scriptPath: String) {
         self.scriptPath = scriptPath
@@ -53,7 +55,7 @@ final class WidgetContentView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         if event.clickCount >= 2 {
-            payload = UsagePayload(ok: false, day: "今日", fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, error: "正在刷新...")
+            payload = UsagePayload(ok: false, day: "今日", fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, needsCredentials: nil, error: "正在刷新...")
             needsDisplay = true
             refresh()
             return
@@ -120,14 +122,83 @@ final class WidgetContentView: NSView {
                         self.usageStatus = Self.randomUsageStatus(for: nextPayload.totalTokens ?? 0)
                     }
                     self.needsDisplay = true
+                    if nextPayload.ok != true && nextPayload.needsCredentials == true {
+                        self.promptForCredentials()
+                    }
                 }
             } catch {
                 DispatchQueue.main.async {
-                    self.payload = UsagePayload(ok: false, day: nil, fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, error: error.localizedDescription)
+                    self.payload = UsagePayload(ok: false, day: nil, fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, needsCredentials: nil, error: error.localizedDescription)
                     self.needsDisplay = true
                 }
             }
         }
+    }
+
+    private func promptForCredentials() {
+        guard !isCredentialPromptVisible else { return }
+        isCredentialPromptVisible = true
+
+        let emailField = NSTextField(frame: NSRect(x: 0, y: 34, width: 300, height: 24))
+        emailField.placeholderString = "邮箱"
+        let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        passwordField.placeholderString = "密码"
+        let stack = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 58))
+        stack.addSubview(emailField)
+        stack.addSubview(passwordField)
+
+        let alert = NSAlert()
+        alert.messageText = "配置 Sub2API 登录凭据"
+        alert.informativeText = "凭据会保存到 macOS Keychain。密码修改或登录失效时，会再次提示你更新。"
+        alert.accessoryView = stack
+        alert.addButton(withTitle: "保存并刷新")
+        alert.addButton(withTitle: "取消")
+
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        isCredentialPromptVisible = false
+
+        guard response == .alertFirstButtonReturn else { return }
+        let email = emailField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let password = passwordField.stringValue
+        guard !email.isEmpty, !password.isEmpty else {
+            payload = UsagePayload(ok: false, day: nil, fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, needsCredentials: true, error: "邮箱和密码不能为空。双击卡片可重新输入。")
+            needsDisplay = true
+            return
+        }
+
+        do {
+            try saveCredential(account: "email", value: email)
+            try saveCredential(account: "password", value: password)
+            deleteCredential(account: "access_token")
+            deleteCredential(account: "refresh_token")
+            payload = UsagePayload(ok: false, day: "今日", fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, needsCredentials: nil, error: "正在刷新...")
+            needsDisplay = true
+            refresh()
+        } catch {
+            payload = UsagePayload(ok: false, day: nil, fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, needsCredentials: true, error: "保存凭据失败：\(error.localizedDescription)")
+            needsDisplay = true
+        }
+    }
+
+    private func saveCredential(account: String, value: String) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = ["add-generic-password", "-U", "-s", "sub2api-usage-widget", "-a", account, "-w", value]
+        try process.run()
+        process.waitUntilExit()
+        if process.terminationStatus != 0 {
+            throw NSError(domain: "Sub2APIUsageWidget", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: "security add-generic-password 失败"])
+        }
+    }
+
+    private func deleteCredential(account: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = ["delete-generic-password", "-s", "sub2api-usage-widget", "-a", account]
+        try? process.run()
+        process.waitUntilExit()
     }
 
     private func drawMetric(label: String, value: String, y: CGFloat, valueColor: NSColor = .white) {
