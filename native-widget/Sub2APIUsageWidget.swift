@@ -1,4 +1,5 @@
 import Cocoa
+import Darwin
 
 struct UsagePayload: Decodable {
     let ok: Bool
@@ -360,8 +361,8 @@ final class WidgetContentView: NSView {
         background.stroke()
 
         let statusColor = payload.ok ? usageStatus.1 : NSColor.systemPink
-        drawCircle(x: bounds.midX - 5, y: 8, radius: 5, color: statusColor)
-        drawText("T", x: 0, y: 17, width: bounds.width, height: 28, size: 24, weight: .bold, color: .white, alignment: .center)
+        drawCircle(x: 13, y: bounds.midY - 5, radius: 5, color: statusColor)
+        drawText(compact(payload.totalTokens), x: 30, y: 13, width: bounds.width - 42, height: 25, size: 20, weight: .bold, color: .white, alignment: .right)
     }
 
     private static func randomUsageStatus(for tokenCount: Double) -> (String, NSColor) {
@@ -480,7 +481,7 @@ final class DraggableWidgetWindow: NSWindow {
 
 final class WidgetWindowController {
     private let expandedSize = NSSize(width: 320, height: 300)
-    private let collapsedSize = NSSize(width: 52, height: 52)
+    private let collapsedSize = NSSize(width: 118, height: 52)
     private let edgeInset: CGFloat = 8
     private let stateStore = WidgetStateStore.shared
     private let window: DraggableWidgetWindow
@@ -659,8 +660,28 @@ func resolveFetchScriptPath() -> String {
     return ""
 }
 
+func acquireSingleInstanceLock() -> Int32? {
+    let path = (NSTemporaryDirectory() as NSString).appendingPathComponent("com.abnerchen.sub2api-usage-widget.lock")
+    let fd = open(path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+    if fd < 0 {
+        return nil
+    }
+
+    if flock(fd, LOCK_EX | LOCK_NB) != 0 {
+        close(fd)
+        return nil
+    }
+
+    return fd
+}
+
 func shellQuote(_ value: String) -> String {
     "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
+let singleInstanceLock = acquireSingleInstanceLock()
+if singleInstanceLock == nil {
+    exit(0)
 }
 
 let app = NSApplication.shared

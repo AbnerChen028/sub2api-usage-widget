@@ -20,6 +20,7 @@ sed "s#__APP_SUPPORT_DIR__#$APP_SUPPORT#g" "$PLIST_SRC" > "$PLIST_DST"
 plutil -lint "$PLIST_DST" >/dev/null
 
 launchctl bootout "gui/$(id -u)" "$PLIST_DST" >/dev/null 2>&1 || true
+pkill -f "/Sub2APIUsageWidget" >/dev/null 2>&1 || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
 launchctl kickstart -k "gui/$(id -u)/com.abnerchen.sub2api-usage-widget"
 
