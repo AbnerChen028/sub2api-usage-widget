@@ -12,8 +12,7 @@
    ```
 
 3. Copy `config.example.json` to `config.json` and set your Sub2API domain.
-4. Open Chrome, log in to your Sub2API admin usage page, and keep a matching tab open.
-5. If macOS prompts for automation permission, allow Übersicht or Terminal to control Google Chrome.
+4. Run `./scripts/configure-credentials.sh` from the repository root to save your Sub2API email and password to macOS Keychain.
 
 ## Test
 

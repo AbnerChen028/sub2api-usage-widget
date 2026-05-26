@@ -6,12 +6,12 @@ import { promisify } from "node:util";
 import {
   buildStatsUrl,
   DEFAULT_CONFIG,
+  fetchStatsWithIndependentAuth,
   extractStats,
   formatShanghaiDate,
   isDirectRun,
   normalizeBaseUrl,
-  parseChromeAuthToken,
-  toChromeAuthErrorMessage,
+  parseSecretValue,
 } from "../scripts/fetch-usage.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -79,23 +79,14 @@ test("extractStats reads stats from API response data envelope", () => {
   });
 });
 
-test("parseChromeAuthToken trims a quoted token from osascript output", () => {
-  assert.equal(parseChromeAuthToken(' "abc.def.ghi" \n'), "abc.def.ghi");
+test("parseSecretValue trims a quoted secret from command output", () => {
+  assert.equal(parseSecretValue(' "abc.def.ghi" \n'), "abc.def.ghi");
 });
 
-test("parseChromeAuthToken returns null for missing browser token values", () => {
-  assert.equal(parseChromeAuthToken("missing value\n"), null);
-  assert.equal(parseChromeAuthToken("null\n"), null);
-  assert.equal(parseChromeAuthToken("\n"), null);
-});
-
-test("toChromeAuthErrorMessage explains blocked Chrome JavaScript automation", () => {
-  const message = toChromeAuthErrorMessage("不允许访问。 (-1723)");
-
-  assert.equal(
-    message,
-    "需要在 Chrome 打开并登录 Sub2API，且开启 View > Developer > Allow JavaScript from Apple Events。",
-  );
+test("parseSecretValue returns null for missing secret values", () => {
+  assert.equal(parseSecretValue("missing value\n"), null);
+  assert.equal(parseSecretValue("null\n"), null);
+  assert.equal(parseSecretValue("\n"), null);
 });
 
 test("isDirectRun handles script paths containing spaces", () => {
@@ -106,6 +97,142 @@ test("isDirectRun handles script paths containing spaces", () => {
     ),
     true,
   );
+});
+
+test("fetchStatsWithIndependentAuth uses cached access token first", async () => {
+  const calls = [];
+
+  const result = await fetchStatsWithIndependentAuth({
+    day: "2026-05-26",
+    config: {
+      baseUrl: DEFAULT_CONFIG.baseUrl,
+    },
+    readSecret: async (account) => {
+      if (account === "access_token") return "cached-token";
+      return null;
+    },
+    writeSecret: async () => {
+      throw new Error("unchanged cached token should not be written");
+    },
+    login: async () => {
+      throw new Error("login should not be used when cached token works");
+    },
+    refreshToken: async () => {
+      throw new Error("refresh should not be used when cached token works");
+    },
+    requestJSON: async (url, token) => {
+      calls.push({ url, token });
+      return {
+        total_requests: 10,
+        total_tokens: 20,
+        total_cache_tokens: 5,
+        total_actual_cost: 0.12,
+      };
+    },
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].token, "cached-token");
+  assert.equal(result.tokenSource, "access_token");
+  assert.equal(result.stats.totalRequests, 10);
+});
+
+test("fetchStatsWithIndependentAuth refreshes tokens after authorization failure", async () => {
+  const tokens = [];
+  const saved = new Map();
+
+  const result = await fetchStatsWithIndependentAuth({
+    day: "2026-05-26",
+    config: {
+      baseUrl: DEFAULT_CONFIG.baseUrl,
+    },
+    readSecret: async (account) => {
+      if (account === "access_token") return "expired-token";
+      if (account === "refresh_token") return "refresh-token";
+      return null;
+    },
+    writeSecret: async (account, value) => {
+      saved.set(account, value);
+    },
+    login: async () => {
+      throw new Error("login should not be used when refresh works");
+    },
+    refreshToken: async (_baseUrl, refreshToken) => {
+      assert.equal(refreshToken, "refresh-token");
+      return {
+        access_token: "fresh-access-token",
+        refresh_token: "fresh-refresh-token",
+        expires_in: 3600,
+      };
+    },
+    requestJSON: async (_url, token) => {
+      tokens.push(token);
+      if (token === "expired-token") {
+        const error = new Error("接口返回 401");
+        error.status = 401;
+        throw error;
+      }
+      return {
+        total_requests: 11,
+        total_tokens: 22,
+        total_cache_tokens: 6,
+        total_actual_cost: 0.34,
+      };
+    },
+  });
+
+  assert.deepEqual(tokens, ["expired-token", "fresh-access-token"]);
+  assert.equal(saved.get("access_token"), "fresh-access-token");
+  assert.equal(saved.get("refresh_token"), "fresh-refresh-token");
+  assert.equal(result.tokenSource, "refresh_token");
+  assert.equal(result.stats.totalRequests, 11);
+});
+
+test("fetchStatsWithIndependentAuth logs in with Keychain credentials when no token exists", async () => {
+  const saved = new Map();
+
+  const result = await fetchStatsWithIndependentAuth({
+    day: "2026-05-26",
+    config: {
+      baseUrl: DEFAULT_CONFIG.baseUrl,
+    },
+    readSecret: async (account) => {
+      if (account === "email") return "admin@example.com";
+      if (account === "password") return "secret-password";
+      return null;
+    },
+    writeSecret: async (account, value) => {
+      saved.set(account, value);
+    },
+    login: async (_baseUrl, credentials) => {
+      assert.deepEqual(credentials, {
+        email: "admin@example.com",
+        password: "secret-password",
+      });
+      return {
+        access_token: "login-access-token",
+        refresh_token: "login-refresh-token",
+        expires_in: 3600,
+      };
+    },
+    refreshToken: async () => {
+      throw new Error("refresh should not be used without refresh token");
+    },
+    requestJSON: async (_url, token) => {
+      assert.equal(token, "login-access-token");
+      return {
+        total_requests: 12,
+        total_tokens: 24,
+        total_cache_tokens: 7,
+        total_actual_cost: 0.56,
+      };
+    },
+  });
+
+  assert.equal(saved.get("access_token"), "login-access-token");
+  assert.equal(saved.get("refresh_token"), "login-refresh-token");
+  assert.equal(result.tokenSource, "login");
+  assert.equal(result.stats.totalRequests, 12);
 });
 
 test("CLI always prints parseable JSON", async () => {

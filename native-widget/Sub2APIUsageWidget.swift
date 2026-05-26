@@ -18,11 +18,11 @@ enum WidgetRefreshError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .emptyOutput:
-            return "刷新没有返回数据。请确认 Chrome 已打开 Sub2API 页面并保持登录，然后双击卡片刷新。"
+            return "刷新没有返回数据。请先运行 scripts/configure-credentials.sh 保存 Sub2API 登录凭据，然后双击卡片刷新。"
         case .invalidJSON(let output):
             let text = output.trimmingCharacters(in: .whitespacesAndNewlines)
             if text.isEmpty {
-                return "刷新没有返回数据。请确认 Chrome 已打开 Sub2API 页面并保持登录，然后双击卡片刷新。"
+                return "刷新没有返回数据。请先运行 scripts/configure-credentials.sh 保存 Sub2API 登录凭据，然后双击卡片刷新。"
             }
             return "刷新返回格式异常：\(String(text.prefix(180)))"
         }

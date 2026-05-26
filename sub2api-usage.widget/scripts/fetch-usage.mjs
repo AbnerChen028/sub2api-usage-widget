@@ -11,10 +11,10 @@ const execFileAsync = promisify(execFile);
 const TIME_ZONE = "Asia/Shanghai";
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const WIDGET_DIR = resolve(SCRIPT_DIR, "..");
+const KEYCHAIN_SERVICE = "sub2api-usage-widget";
 
 export const DEFAULT_CONFIG = {
   baseUrl: "https://sub2api.example.com",
-  chromeUrlMatch: "sub2api",
 };
 
 export function normalizeBaseUrl(value) {
@@ -68,7 +68,7 @@ export function buildStatsUrl(day, baseUrl = DEFAULT_CONFIG.baseUrl, mode = "ran
   return url.toString();
 }
 
-export function parseChromeAuthToken(stdout) {
+export function parseSecretValue(stdout) {
   const value = String(stdout ?? "")
     .trim()
     .replace(/^"(.*)"$/, "$1")
@@ -91,47 +91,45 @@ export function extractStats(payload) {
   };
 }
 
-export function toChromeAuthErrorMessage(detail) {
-  const text = String(detail ?? "");
-  if (text.includes("-1723") || text.includes("不允许访问") || text.includes("not allowed")) {
-    return "需要在 Chrome 打开并登录 Sub2API，且开启 View > Developer > Allow JavaScript from Apple Events。";
+async function readKeychainSecret(account) {
+  try {
+    const { stdout } = await execFileAsync(
+      "security",
+      ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w"],
+      {
+        timeout: 10_000,
+        maxBuffer: 1024 * 1024,
+      },
+    );
+    return parseSecretValue(stdout);
+  } catch (error) {
+    if (error?.code === 44) return null;
+    return null;
   }
-
-  return `无法从 Chrome 读取登录态：${text.trim()}`;
 }
 
-async function getChromeAuthToken(chromeUrlMatch) {
-  const script = `
-    tell application "Google Chrome"
-      if not (exists window 1) then return ""
-      repeat with w in windows
-        set tabIndex to 1
-        repeat with t in tabs of w
-          if (URL of t contains "${chromeUrlMatch.replaceAll('"', '\\"')}") then
-            set active tab index of w to tabIndex
-            set tokenValue to execute active tab of w javascript "localStorage.getItem('auth_token')"
-            if tokenValue is not missing value and tokenValue is not "" then return tokenValue
-          end if
-          set tabIndex to tabIndex + 1
-        end repeat
-      end repeat
-      return ""
-    end tell
-  `;
-
-  try {
-    const { stdout } = await execFileAsync("osascript", ["-e", script], {
+async function writeKeychainSecret(account, value) {
+  if (!value) return;
+  await execFileAsync(
+    "security",
+    [
+      "add-generic-password",
+      "-U",
+      "-s",
+      KEYCHAIN_SERVICE,
+      "-a",
+      account,
+      "-w",
+      value,
+    ],
+    {
       timeout: 10_000,
       maxBuffer: 1024 * 1024,
-    });
-    return parseChromeAuthToken(stdout);
-  } catch (error) {
-    const detail = error?.stderr || error?.message || String(error);
-    throw new Error(toChromeAuthErrorMessage(detail));
-  }
+    },
+  );
 }
 
-async function requestStats(url, token) {
+export async function requestStats(url, token) {
   const response = await fetch(url, {
     headers: {
       accept: "application/json",
@@ -141,22 +139,139 @@ async function requestStats(url, token) {
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(`接口返回 ${response.status}${body ? `：${body.slice(0, 160)}` : ""}`);
+    const error = new Error(`接口返回 ${response.status}${body ? `：${body.slice(0, 160)}` : ""}`);
+    error.status = response.status;
+    throw error;
   }
 
   return response.json();
 }
 
-async function fetchStats(token, day, baseUrl) {
+async function requestAuth(baseUrl, path, body) {
+  const response = await fetch(`${normalizeBaseUrl(baseUrl)}/api/v1${path}`, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const payload = await response.json().catch(async () => {
+    const text = await response.text().catch(() => "");
+    return { message: text };
+  });
+
+  if (!response.ok) {
+    const error = new Error(`认证接口返回 ${response.status}${payload?.message ? `：${payload.message}` : ""}`);
+    error.status = response.status;
+    throw error;
+  }
+
+  if (payload && typeof payload === "object" && "code" in payload) {
+    if (payload.code === 0) return payload.data;
+    throw new Error(payload.message || "认证失败");
+  }
+
+  return payload?.data && typeof payload.data === "object" ? payload.data : payload;
+}
+
+export async function loginWithPassword(baseUrl, credentials) {
+  return requestAuth(baseUrl, "/auth/login", credentials);
+}
+
+export async function refreshAccessToken(baseUrl, refreshToken) {
+  return requestAuth(baseUrl, "/auth/refresh", { refresh_token: refreshToken });
+}
+
+async function fetchStats(token, day, baseUrl, requestJSON = requestStats) {
   try {
-    return await requestStats(buildStatsUrl(day, baseUrl), token);
+    return await requestJSON(buildStatsUrl(day, baseUrl), token);
   } catch (rangeError) {
+    if (rangeError?.status === 401 || rangeError?.status === 403) {
+      throw rangeError;
+    }
     try {
-      return await requestStats(buildStatsUrl(day, baseUrl, "period"), token);
+      return await requestJSON(buildStatsUrl(day, baseUrl, "period"), token);
     } catch (periodError) {
       throw new Error(`${rangeError.message}; fallback failed: ${periodError.message}`);
     }
   }
+}
+
+function isAuthorizationError(error) {
+  return error?.status === 401 || error?.status === 403;
+}
+
+async function saveAuthTokens(writeSecret, authPayload) {
+  if (authPayload?.access_token) {
+    await writeSecret("access_token", authPayload.access_token);
+  }
+  if (authPayload?.refresh_token) {
+    await writeSecret("refresh_token", authPayload.refresh_token);
+  }
+}
+
+export async function fetchStatsWithIndependentAuth({
+  day,
+  config,
+  readSecret = readKeychainSecret,
+  writeSecret = writeKeychainSecret,
+  login = loginWithPassword,
+  refreshToken = refreshAccessToken,
+  requestJSON = requestStats,
+} = {}) {
+  const baseUrl = normalizeBaseUrl(config?.baseUrl || DEFAULT_CONFIG.baseUrl);
+
+  const accessToken = await readSecret("access_token");
+  if (accessToken) {
+    try {
+      return {
+        tokenSource: "access_token",
+        stats: extractStats(await fetchStats(accessToken, day, baseUrl, requestJSON)),
+      };
+    } catch (error) {
+      if (!isAuthorizationError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  const storedRefreshToken = await readSecret("refresh_token");
+  if (storedRefreshToken) {
+    try {
+      const refreshed = await refreshToken(baseUrl, storedRefreshToken);
+      await saveAuthTokens(writeSecret, refreshed);
+      return {
+        tokenSource: "refresh_token",
+        stats: extractStats(await fetchStats(refreshed.access_token, day, baseUrl, requestJSON)),
+      };
+    } catch (error) {
+      if (!isAuthorizationError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  const email = await readSecret("email");
+  const password = await readSecret("password");
+  if (!email || !password) {
+    throw new Error("缺少 Sub2API 登录凭据。请先运行 scripts/configure-credentials.sh 保存邮箱和密码。");
+  }
+
+  const loginResult = await login(baseUrl, { email, password });
+  if (loginResult?.requires_2fa) {
+    throw new Error("当前账号开启了 2FA，小组件暂不支持独立完成二次验证。建议为挂件准备一个只读管理员账号。");
+  }
+  if (!loginResult?.access_token) {
+    throw new Error("登录成功但没有返回 access_token。");
+  }
+
+  await saveAuthTokens(writeSecret, loginResult);
+  return {
+    tokenSource: "login",
+    stats: extractStats(await fetchStats(loginResult.access_token, day, baseUrl, requestJSON)),
+  };
 }
 
 export async function main() {
@@ -165,16 +280,12 @@ export async function main() {
 
   try {
     const config = await loadConfig();
-    const token = await getChromeAuthToken(config.chromeUrlMatch || new URL(config.baseUrl).hostname);
-    if (!token) {
-      throw new Error("需要在 Chrome 打开并登录 Sub2API，且允许 Apple Events 执行页面 JavaScript。");
-    }
-
-    const stats = extractStats(await fetchStats(token, day, config.baseUrl));
+    const { stats, tokenSource } = await fetchStatsWithIndependentAuth({ day, config });
     return {
       ok: true,
       day,
       fetchedAt,
+      tokenSource,
       ...stats,
     };
   } catch (error) {

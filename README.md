@@ -8,17 +8,17 @@ A tiny macOS desktop widget for monitoring today's Sub2API usage:
 - total cost
 - friendly usage reminders based on token volume
 
-It reads the login token from an already logged-in Google Chrome tab and calls the Sub2API admin usage API.
+It logs in directly through the Sub2API API, stores secrets in macOS Keychain, and refreshes usage without needing a browser.
 
 ## Requirements
 
 - macOS
-- Google Chrome
 - Node.js 18+ available as `node`
 - Swift toolchain / Xcode Command Line Tools for the native widget
 - A Sub2API-compatible admin site that exposes:
   - `GET /api/v1/usage/stats`
-  - `localStorage.auth_token` in the logged-in web app
+  - `POST /api/v1/auth/login`
+  - `POST /api/v1/auth/refresh`
 
 Install command line tools if needed:
 
@@ -38,26 +38,21 @@ Edit `sub2api-usage.widget/config.json`:
 
 ```json
 {
-  "baseUrl": "https://your-sub2api.example.com",
-  "chromeUrlMatch": "your-sub2api.example.com"
+  "baseUrl": "https://your-sub2api.example.com"
 }
 ```
 
-`baseUrl` is your Sub2API site origin. `chromeUrlMatch` is the string used to find the logged-in Chrome tab.
+`baseUrl` is your Sub2API site origin.
 
-## Chrome Setup
+Save your Sub2API login credentials to macOS Keychain:
 
-1. Open your Sub2API admin page in Google Chrome and log in.
-2. Enable Chrome Apple Events JavaScript:
-   - Chrome menu: `View > Developer > Allow JavaScript from Apple Events`
-
-The widget uses AppleScript to run:
-
-```js
-localStorage.getItem("auth_token")
+```bash
+./scripts/configure-credentials.sh
 ```
 
-in the matching Chrome tab. The token is not written to disk.
+The script stores `email` and `password` in Keychain service `sub2api-usage-widget`.
+The widget then logs in directly, stores `access_token` and `refresh_token` in the same Keychain service,
+and refreshes tokens automatically. Credentials and tokens are not written to the repository config.
 
 ## Run
 
