@@ -8,9 +8,7 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/zsh</string>
-    <string>-lc</string>
-    <string>"__APP_SUPPORT_DIR__/Sub2APIUsageWidget" "__APP_SUPPORT_DIR__/sub2api-usage.widget/scripts/fetch-usage.mjs"</string>
+    <string>__APP_SUPPORT_DIR__/Sub2API Usage Widget.app/Contents/MacOS/Sub2APIUsageWidget</string>
   </array>
 
   <key>RunAtLoad</key>

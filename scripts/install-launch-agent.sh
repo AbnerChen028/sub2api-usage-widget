@@ -6,17 +6,15 @@ APP_SUPPORT="$HOME/Library/Application Support/Sub2APIUsageWidget"
 PLIST_SRC="$ROOT_DIR/launchd/com.abnerchen.sub2api-usage-widget.plist"
 PLIST_DST="$HOME/Library/LaunchAgents/com.abnerchen.sub2api-usage-widget.plist"
 
-"$ROOT_DIR/scripts/build-native-widget.sh"
+"$ROOT_DIR/scripts/build-app.sh"
 
 mkdir -p "$APP_SUPPORT/sub2api-usage.widget/scripts" \
   "$APP_SUPPORT/sub2api-usage.widget/test" \
   "$APP_SUPPORT/logs" \
   "$HOME/Library/LaunchAgents"
 
-cp "$ROOT_DIR/native-widget/Sub2APIUsageWidget" "$APP_SUPPORT/Sub2APIUsageWidget"
-cp "$ROOT_DIR/sub2api-usage.widget/scripts/fetch-usage.mjs" "$APP_SUPPORT/sub2api-usage.widget/scripts/fetch-usage.mjs"
-cp "$ROOT_DIR/sub2api-usage.widget/config.json" "$APP_SUPPORT/sub2api-usage.widget/config.json"
-chmod +x "$APP_SUPPORT/Sub2APIUsageWidget"
+rm -rf "$APP_SUPPORT/Sub2API Usage Widget.app"
+cp -R "$ROOT_DIR/dist/Sub2API Usage Widget.app" "$APP_SUPPORT/Sub2API Usage Widget.app"
 
 sed "s#__APP_SUPPORT_DIR__#$APP_SUPPORT#g" "$PLIST_SRC" > "$PLIST_DST"
 plutil -lint "$PLIST_DST" >/dev/null

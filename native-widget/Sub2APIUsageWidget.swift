@@ -12,6 +12,54 @@ struct UsagePayload: Decodable {
     let error: String?
 }
 
+enum WidgetDisplayMode {
+    case expanded
+    case collapsed
+}
+
+final class WidgetStateStore {
+    private enum Keys {
+        static let isCollapsed = "isCollapsed"
+        static let expandedFrame = "expandedFrame"
+        static let collapsedFrame = "collapsedFrame"
+    }
+
+    static let shared = WidgetStateStore()
+    private let defaults = UserDefaults.standard
+
+    var isCollapsed: Bool {
+        get { defaults.bool(forKey: Keys.isCollapsed) }
+        set { defaults.set(newValue, forKey: Keys.isCollapsed) }
+    }
+
+    func expandedFrame(default defaultFrame: NSRect) -> NSRect {
+        rect(forKey: Keys.expandedFrame) ?? defaultFrame
+    }
+
+    func collapsedFrame(default defaultFrame: NSRect) -> NSRect {
+        rect(forKey: Keys.collapsedFrame) ?? defaultFrame
+    }
+
+    func saveExpandedFrame(_ frame: NSRect) {
+        save(frame, forKey: Keys.expandedFrame)
+    }
+
+    func saveCollapsedFrame(_ frame: NSRect) {
+        save(frame, forKey: Keys.collapsedFrame)
+    }
+
+    private func rect(forKey key: String) -> NSRect? {
+        guard let string = defaults.string(forKey: key) else { return nil }
+        let rect = NSRectFromString(string)
+        if rect.isEmpty || rect.width < 1 || rect.height < 1 { return nil }
+        return rect
+    }
+
+    private func save(_ rect: NSRect, forKey key: String) {
+        defaults.set(NSStringFromRect(rect), forKey: key)
+    }
+}
+
 enum WidgetRefreshError: LocalizedError {
     case emptyOutput
     case invalidJSON(String)
@@ -31,14 +79,21 @@ enum WidgetRefreshError: LocalizedError {
 }
 
 final class WidgetContentView: NSView {
+    weak var controller: WidgetWindowController?
     private let scriptPath: String
     private var timer: Timer?
     private var payload = UsagePayload(ok: false, day: "今日", fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, needsCredentials: nil, error: "正在刷新...")
     private var usageStatus = ("正在刷新今日用量", NSColor.systemGreen)
     private var isCredentialPromptVisible = false
+    private var displayMode: WidgetDisplayMode
+    private var isDragging = false
+    private var collapsedDragStartMouse: NSPoint?
+    private var collapsedDragStartOrigin: NSPoint?
+    private let collapseButtonSize: CGFloat = 26
 
-    init(frame: NSRect, scriptPath: String) {
+    init(frame: NSRect, scriptPath: String, displayMode: WidgetDisplayMode) {
         self.scriptPath = scriptPath
+        self.displayMode = displayMode
         super.init(frame: frame)
         wantsLayer = true
         refresh()
@@ -54,17 +109,61 @@ final class WidgetContentView: NSView {
     override var isFlipped: Bool { true }
 
     override func mouseDown(with event: NSEvent) {
+        if displayMode == .collapsed {
+            isDragging = false
+            collapsedDragStartMouse = NSEvent.mouseLocation
+            collapsedDragStartOrigin = window?.frame.origin
+            return
+        }
+
         if event.clickCount >= 2 {
             payload = UsagePayload(ok: false, day: "今日", fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, needsCredentials: nil, error: "正在刷新...")
             needsDisplay = true
             refresh()
             return
         }
+
+        if collapseButtonRect.contains(convert(event.locationInWindow, from: nil)) {
+            controller?.collapse()
+            return
+        }
+
         window?.performDrag(with: event)
+        controller?.windowDidFinishDragging()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        if displayMode == .collapsed {
+            isDragging = true
+            guard let startMouse = collapsedDragStartMouse, let startOrigin = collapsedDragStartOrigin else { return }
+            let current = NSEvent.mouseLocation
+            window?.setFrameOrigin(NSPoint(x: startOrigin.x + current.x - startMouse.x, y: startOrigin.y + current.y - startMouse.y))
+            return
+        }
+        super.mouseDragged(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if displayMode == .collapsed {
+            if isDragging {
+                controller?.snapCollapsedWindowToNearestSide()
+            } else {
+                controller?.expand()
+            }
+            isDragging = false
+            collapsedDragStartMouse = nil
+            collapsedDragStartOrigin = nil
+        }
+        super.mouseUp(with: event)
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+
+        if displayMode == .collapsed {
+            drawCollapsed()
+            return
+        }
 
         let bounds = self.bounds
         let background = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 14, yRadius: 14)
@@ -76,6 +175,7 @@ final class WidgetContentView: NSView {
 
         drawText("今日Token用量", x: 20, y: 18, width: 230, height: 28, size: 25, weight: .bold, color: .white)
         drawCircle(x: bounds.width - 42, y: 29, radius: 8, color: payload.ok ? .systemGreen : .systemPink)
+        drawCollapseButton()
         drawText("\(payload.day ?? "今日") · \(formatTime(payload.fetchedAt)) 更新", x: 21, y: 52, width: bounds.width - 42, height: 18, size: 12, weight: .regular, color: NSColor(calibratedWhite: 0.82, alpha: 0.82))
 
         if payload.ok {
@@ -90,6 +190,11 @@ final class WidgetContentView: NSView {
             drawSeparator(y: 82, color: NSColor.systemPink.withAlphaComponent(0.35))
             drawText(payload.error ?? "读取失败", x: 20, y: 98, width: bounds.width - 40, height: bounds.height - 112, size: 13, weight: .regular, color: NSColor(calibratedRed: 1.0, green: 0.82, blue: 0.86, alpha: 1), wraps: true)
         }
+    }
+
+    func setDisplayMode(_ mode: WidgetDisplayMode) {
+        displayMode = mode
+        needsDisplay = true
     }
 
     private func refresh() {
@@ -230,6 +335,35 @@ final class WidgetContentView: NSView {
         drawText(usageStatus.0, x: 20, y: y, width: bounds.width - 40, height: 18, size: 12, weight: .semibold, color: usageStatus.1)
     }
 
+    private var collapseButtonRect: NSRect {
+        NSRect(x: bounds.width - 75, y: 20, width: collapseButtonSize, height: collapseButtonSize)
+    }
+
+    private func drawCollapseButton() {
+        let rect = collapseButtonRect
+        let path = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
+        NSColor(calibratedWhite: 1, alpha: 0.11).setFill()
+        path.fill()
+        NSColor(calibratedWhite: 1, alpha: 0.28).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+        drawText("‹", x: rect.minX, y: rect.minY - 1, width: rect.width, height: rect.height, size: 23, weight: .semibold, color: NSColor(calibratedWhite: 1, alpha: 0.82), alignment: .center)
+    }
+
+    private func drawCollapsed() {
+        let bounds = self.bounds
+        let background = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 16, yRadius: 16)
+        NSColor(calibratedRed: 0.05, green: 0.07, blue: 0.08, alpha: 0.84).setFill()
+        background.fill()
+        NSColor(calibratedWhite: 0.82, alpha: 0.36).setStroke()
+        background.lineWidth = 1.2
+        background.stroke()
+
+        let statusColor = payload.ok ? usageStatus.1 : NSColor.systemPink
+        drawCircle(x: bounds.midX - 5, y: 8, radius: 5, color: statusColor)
+        drawText("T", x: 0, y: 17, width: bounds.width, height: 28, size: 24, weight: .bold, color: .white, alignment: .center)
+    }
+
     private static func randomUsageStatus(for tokenCount: Double) -> (String, NSColor) {
         if tokenCount < 20_000_000 {
             return ([
@@ -319,6 +453,7 @@ final class WidgetContentView: NSView {
 }
 
 final class DraggableWidgetWindow: NSWindow {
+    weak var widgetController: WidgetWindowController?
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
@@ -337,29 +472,138 @@ final class DraggableWidgetWindow: NSWindow {
     }
 
     override func mouseUp(with event: NSEvent) {
+        widgetController?.windowDidFinishDragging()
         initialMouseLocation = nil
         initialFrameOrigin = nil
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var window: NSWindow?
+final class WidgetWindowController {
+    private let expandedSize = NSSize(width: 320, height: 300)
+    private let collapsedSize = NSSize(width: 52, height: 52)
+    private let edgeInset: CGFloat = 8
+    private let stateStore = WidgetStateStore.shared
+    private let window: DraggableWidgetWindow
+    private let contentView: WidgetContentView
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        installEditMenu()
-        let scriptPath = CommandLine.arguments.dropFirst().first ?? ""
-        let frame = NSRect(x: 28, y: 500, width: 320, height: 300)
-        let window = DraggableWidgetWindow(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        window.contentView = WidgetContentView(frame: NSRect(x: 0, y: 0, width: frame.width, height: frame.height), scriptPath: scriptPath)
+    private var displayMode: WidgetDisplayMode
+
+    init(scriptPath: String) {
+        let defaultExpandedFrame = NSRect(x: 28, y: 500, width: expandedSize.width, height: expandedSize.height)
+        displayMode = stateStore.isCollapsed ? .collapsed : .expanded
+        let defaultCollapsedFrame = Self.collapsedFrame(from: defaultExpandedFrame, size: collapsedSize, edgeInset: edgeInset)
+        let initialFrame = displayMode == .collapsed
+            ? stateStore.collapsedFrame(default: defaultCollapsedFrame)
+            : stateStore.expandedFrame(default: defaultExpandedFrame)
+
+        window = DraggableWidgetWindow(contentRect: initialFrame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        contentView = WidgetContentView(frame: NSRect(x: 0, y: 0, width: initialFrame.width, height: initialFrame.height), scriptPath: scriptPath, displayMode: displayMode)
+        contentView.controller = self
+        window.widgetController = self
+        window.contentView = contentView
         window.isOpaque = false
         window.backgroundColor = .clear
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         window.hasShadow = true
         window.isMovableByWindowBackground = true
-        window.setFrame(frame, display: true)
+        window.setFrame(initialFrame, display: true)
+    }
+
+    func show() {
         window.makeKeyAndOrderFront(nil)
-        self.window = window
+    }
+
+    func collapse() {
+        guard displayMode == .expanded else { return }
+        stateStore.saveExpandedFrame(window.frame)
+        displayMode = .collapsed
+        stateStore.isCollapsed = true
+
+        let nextFrame = Self.collapsedFrame(from: window.frame, size: collapsedSize, edgeInset: edgeInset)
+        apply(mode: .collapsed, frame: nextFrame, animate: true)
+        stateStore.saveCollapsedFrame(window.frame)
+    }
+
+    func expand() {
+        guard displayMode == .collapsed else { return }
+        stateStore.saveCollapsedFrame(window.frame)
+        displayMode = .expanded
+        stateStore.isCollapsed = false
+
+        let defaultFrame = NSRect(x: 28, y: 500, width: expandedSize.width, height: expandedSize.height)
+        var nextFrame = stateStore.expandedFrame(default: defaultFrame)
+        nextFrame.size = expandedSize
+        apply(mode: .expanded, frame: constrain(frame: nextFrame), animate: true)
+        stateStore.saveExpandedFrame(window.frame)
+    }
+
+    func snapCollapsedWindowToNearestSide() {
+        guard displayMode == .collapsed else { return }
+        let nextFrame = Self.collapsedFrame(from: window.frame, size: collapsedSize, edgeInset: edgeInset)
+        apply(mode: .collapsed, frame: nextFrame, animate: true)
+        stateStore.saveCollapsedFrame(window.frame)
+    }
+
+    func windowDidFinishDragging() {
+        if displayMode == .expanded {
+            stateStore.saveExpandedFrame(window.frame)
+        } else {
+            stateStore.saveCollapsedFrame(window.frame)
+        }
+    }
+
+    private func apply(mode: WidgetDisplayMode, frame: NSRect, animate: Bool) {
+        contentView.setDisplayMode(mode)
+        contentView.frame = NSRect(x: 0, y: 0, width: frame.width, height: frame.height)
+        window.setFrame(frame, display: true, animate: animate)
+    }
+
+    private func constrain(frame: NSRect) -> NSRect {
+        guard let screenFrame = NSScreen.screens.first(where: { $0.visibleFrame.intersects(frame) })?.visibleFrame ?? NSScreen.main?.visibleFrame else {
+            return frame
+        }
+
+        var next = frame
+        if next.maxX > screenFrame.maxX - edgeInset {
+            next.origin.x = screenFrame.maxX - edgeInset - next.width
+        }
+        if next.minX < screenFrame.minX + edgeInset {
+            next.origin.x = screenFrame.minX + edgeInset
+        }
+        if next.maxY > screenFrame.maxY - edgeInset {
+            next.origin.y = screenFrame.maxY - edgeInset - next.height
+        }
+        if next.minY < screenFrame.minY + edgeInset {
+            next.origin.y = screenFrame.minY + edgeInset
+        }
+        return next
+    }
+
+    private static func collapsedFrame(from frame: NSRect, size: NSSize, edgeInset: CGFloat) -> NSRect {
+        guard let screenFrame = NSScreen.screens.first(where: { $0.visibleFrame.intersects(frame) })?.visibleFrame ?? NSScreen.main?.visibleFrame else {
+            return NSRect(x: frame.minX, y: frame.minY, width: size.width, height: size.height)
+        }
+
+        let centerY = frame.midY
+        let minY = screenFrame.minY + edgeInset
+        let maxY = screenFrame.maxY - edgeInset - size.height
+        let y = min(max(centerY - size.height / 2, minY), maxY)
+        let distanceToLeft = abs(frame.midX - screenFrame.minX)
+        let distanceToRight = abs(screenFrame.maxX - frame.midX)
+        let x = distanceToLeft <= distanceToRight ? screenFrame.minX + edgeInset : screenFrame.maxX - edgeInset - size.width
+        return NSRect(x: x, y: y, width: size.width, height: size.height)
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var widgetController: WidgetWindowController?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        installEditMenu()
+        let controller = WidgetWindowController(scriptPath: resolveFetchScriptPath())
+        controller.show()
+        widgetController = controller
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -396,6 +640,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.mainMenu = mainMenu
     }
+}
+
+func resolveFetchScriptPath() -> String {
+    if let argument = CommandLine.arguments.dropFirst().first, !argument.isEmpty {
+        return argument
+    }
+
+    if let resourcePath = Bundle.main.resourcePath {
+        let bundledScript = URL(fileURLWithPath: resourcePath)
+            .appendingPathComponent("sub2api-usage.widget/scripts/fetch-usage.mjs")
+            .path
+        if FileManager.default.fileExists(atPath: bundledScript) {
+            return bundledScript
+        }
+    }
+
+    return ""
 }
 
 func shellQuote(_ value: String) -> String {

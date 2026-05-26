@@ -50,23 +50,39 @@ xcode-select --install
 
 ## 手动运行
 
-构建并启动原生挂件：
+本地开发时，构建并启动原生挂件：
 
 ```bash
 ./scripts/run-native-widget.sh
 ```
 
-挂件每 5 分钟自动刷新一次。可以拖动挂件背景移动位置，也可以双击挂件立即刷新。
+挂件每 5 分钟自动刷新一次。可以拖动挂件背景移动位置，也可以双击挂件立即刷新。点击右上角折叠按钮后，挂件会缩成 `T` 图标并贴到最近的左/右屏幕边缘；再次点击小图标即可恢复。展开/折叠状态和位置会在重启后保留。
+
+## 构建 macOS App
+
+构建轻量 App：
+
+```bash
+./scripts/build-app.sh
+```
+
+构建产物位置：
+
+```text
+dist/Sub2API Usage Widget.app
+```
+
+你可以把这个 App 复制到 `/Applications` 或任意目录，然后双击启动。当前 App 是轻量封装，内部仍会调用打包进去的 `fetch-usage.mjs`，所以机器上仍需要安装 Node.js 18+。
 
 ## 登录后自动启动
 
-安装为 macOS LaunchAgent：
+把 App 安装为 macOS LaunchAgent：
 
 ```bash
 ./scripts/install-launch-agent.sh
 ```
 
-安装脚本会构建原生挂件，并把运行文件复制到：
+安装脚本会构建 App，并把它复制到：
 
 ```text
 ~/Library/Application Support/Sub2APIUsageWidget
@@ -78,7 +94,7 @@ xcode-select --install
 ~/Library/LaunchAgents/com.abnerchen.sub2api-usage-widget.plist
 ```
 
-安装后，macOS 登录时会自动启动挂件。
+安装后，macOS 登录时会自动启动 App。
 
 手动重启挂件：
 
@@ -136,3 +152,5 @@ node --test sub2api-usage.widget/test/fetch-usage.test.mjs
 ## 说明
 
 仓库中仍保留了 Übersicht 版本入口 `sub2api-usage.widget/index.jsx`。不过推荐使用原生挂件，因为它在当前 macOS 上更稳定，并支持首次配置弹窗、自启动和拖动。
+
+当前 App 是轻量封装版。未来如果要做完全原生版，可以把 API 取数和 token 刷新逻辑迁移到 Swift 中，进一步移除 Node.js 依赖。

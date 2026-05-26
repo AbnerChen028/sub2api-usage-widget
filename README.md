@@ -50,23 +50,39 @@ For headless setup or troubleshooting, you can still save credentials from a she
 
 ## Run
 
-Build and start the native widget:
+Build and start the native widget for local development:
 
 ```bash
 ./scripts/run-native-widget.sh
 ```
 
-The widget refreshes every 5 minutes. You can drag it by its background and double-click it to refresh immediately.
+The widget refreshes every 5 minutes. You can drag it by its background, double-click it to refresh immediately, click the top-right collapse control to tuck it against the nearest left/right screen edge, and click the compact `T` icon to restore it. The expanded/collapsed state and position are remembered across restarts.
+
+## Build the macOS App
+
+Build a lightweight app bundle:
+
+```bash
+./scripts/build-app.sh
+```
+
+The app is created at:
+
+```text
+dist/Sub2API Usage Widget.app
+```
+
+You can copy the app to `/Applications` or any folder and launch it with Finder. This lightweight app still requires Node.js 18+ on the machine because it runs the bundled `fetch-usage.mjs` script internally.
 
 ## Start Automatically After Login
 
-Install the widget as a macOS LaunchAgent:
+Install the app as a macOS LaunchAgent:
 
 ```bash
 ./scripts/install-launch-agent.sh
 ```
 
-The installer builds the native widget, copies the runtime files to:
+The installer builds the app, copies it to:
 
 ```text
 ~/Library/Application Support/Sub2APIUsageWidget
@@ -78,7 +94,7 @@ and registers:
 ~/Library/LaunchAgents/com.abnerchen.sub2api-usage-widget.plist
 ```
 
-After installation, macOS starts the widget when you log in. To restart it manually:
+After installation, macOS starts the app when you log in. To restart it manually:
 
 ```bash
 launchctl kickstart -k "gui/$(id -u)/com.abnerchen.sub2api-usage-widget"
@@ -134,3 +150,5 @@ Each refresh picks a random friendly message from the current threshold bucket.
 ## Notes
 
 This repository also contains an Übersicht-compatible widget entry in `sub2api-usage.widget/index.jsx`, but the native widget is the recommended runner because it is more reliable on current macOS releases.
+
+The current app bundle is intentionally lightweight. A future fully native version can move the API fetch and auth refresh logic into Swift and remove the Node.js requirement.
