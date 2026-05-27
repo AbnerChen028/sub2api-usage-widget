@@ -90,7 +90,7 @@ final class WidgetContentView: NSView {
     private var isDragging = false
     private var collapsedDragStartMouse: NSPoint?
     private var collapsedDragStartOrigin: NSPoint?
-    private let collapseButtonSize: CGFloat = 26
+    private let collapseButtonSize: CGFloat = 32
 
     init(frame: NSRect, scriptPath: String, displayMode: WidgetDisplayMode) {
         self.scriptPath = scriptPath
@@ -109,6 +109,10 @@ final class WidgetContentView: NSView {
 
     override var isFlipped: Bool { true }
 
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
     override func mouseDown(with event: NSEvent) {
         if displayMode == .collapsed {
             isDragging = false
@@ -117,15 +121,15 @@ final class WidgetContentView: NSView {
             return
         }
 
+        if collapseButtonHitRect.contains(convert(event.locationInWindow, from: nil)) {
+            controller?.collapse()
+            return
+        }
+
         if event.clickCount >= 2 {
             payload = UsagePayload(ok: false, day: "今日", fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, needsCredentials: nil, error: "正在刷新...")
             needsDisplay = true
             refresh()
-            return
-        }
-
-        if collapseButtonRect.contains(convert(event.locationInWindow, from: nil)) {
-            controller?.collapse()
             return
         }
 
@@ -337,7 +341,11 @@ final class WidgetContentView: NSView {
     }
 
     private var collapseButtonRect: NSRect {
-        NSRect(x: bounds.width - 75, y: 20, width: collapseButtonSize, height: collapseButtonSize)
+        NSRect(x: bounds.width - 78, y: 17, width: collapseButtonSize, height: collapseButtonSize)
+    }
+
+    private var collapseButtonHitRect: NSRect {
+        collapseButtonRect.insetBy(dx: -10, dy: -10)
     }
 
     private func drawCollapseButton() {
