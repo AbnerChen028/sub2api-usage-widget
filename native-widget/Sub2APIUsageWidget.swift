@@ -91,6 +91,7 @@ final class WidgetContentView: NSView {
     private var isCollapseButtonPressed = false
     private var collapsedDragStartMouse: NSPoint?
     private var collapsedDragStartOrigin: NSPoint?
+    private var collapsedInteractionEnabledAt = Date.distantPast
     private let collapseButtonSize: CGFloat = 32
 
     init(frame: NSRect, scriptPath: String, displayMode: WidgetDisplayMode) {
@@ -116,6 +117,7 @@ final class WidgetContentView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         if displayMode == .collapsed {
+            guard Date() >= collapsedInteractionEnabledAt else { return }
             isDragging = false
             collapsedDragStartMouse = NSEvent.mouseLocation
             collapsedDragStartOrigin = window?.frame.origin
@@ -141,6 +143,7 @@ final class WidgetContentView: NSView {
 
     override func mouseDragged(with event: NSEvent) {
         if displayMode == .collapsed {
+            guard Date() >= collapsedInteractionEnabledAt else { return }
             isDragging = true
             guard let startMouse = collapsedDragStartMouse, let startOrigin = collapsedDragStartOrigin else { return }
             let current = NSEvent.mouseLocation
@@ -162,6 +165,12 @@ final class WidgetContentView: NSView {
         }
 
         if displayMode == .collapsed {
+            guard Date() >= collapsedInteractionEnabledAt, collapsedDragStartMouse != nil else {
+                isDragging = false
+                collapsedDragStartMouse = nil
+                collapsedDragStartOrigin = nil
+                return
+            }
             if isDragging {
                 controller?.snapCollapsedWindowToNearestSide()
             } else {
@@ -211,6 +220,12 @@ final class WidgetContentView: NSView {
 
     func setDisplayMode(_ mode: WidgetDisplayMode) {
         displayMode = mode
+        if mode == .collapsed {
+            collapsedInteractionEnabledAt = Date().addingTimeInterval(0.45)
+            isDragging = false
+            collapsedDragStartMouse = nil
+            collapsedDragStartOrigin = nil
+        }
         needsDisplay = true
     }
 
