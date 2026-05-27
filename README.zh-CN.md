@@ -15,7 +15,6 @@
 ## 环境要求
 
 - macOS
-- Node.js 18+，命令行可使用 `node`
 - Swift 工具链 / Xcode Command Line Tools
 - 一个兼容 Sub2API 的管理站点，并提供：
   - `GET /api/v1/usage/stats`
@@ -35,8 +34,10 @@ xcode-select --install
 - Sub2API 服务地址，例如 `https://your-sub2api.example.com`
 - 登录邮箱
 - 登录密码
+- 刷新间隔（分钟）
 
 这些信息会保存到 Keychain 的 `sub2api-usage-widget` 服务下。挂件之后会自动登录、保存 `access_token` 和 `refresh_token`，并在 token 过期后自动续期。
+刷新间隔保存在本机配置中，默认 5 分钟，范围限制为 1-120 分钟。
 
 如果服务地址或密码后续发生变化，或者登录失败，挂件会再次弹出配置窗口。取消后不会卡住，双击挂件可以再次刷新并触发配置。
 
@@ -56,7 +57,7 @@ xcode-select --install
 ./scripts/run-native-widget.sh
 ```
 
-挂件每 5 分钟自动刷新一次。可以拖动挂件背景移动位置，也可以双击挂件立即刷新。点击右上角折叠按钮后，挂件会缩成 `T` 图标并贴到最近的左/右屏幕边缘；再次点击小图标即可恢复。展开/折叠状态和位置会在重启后保留。
+挂件会按你配置的间隔自动刷新。可以拖动挂件背景移动位置，也可以双击挂件立即刷新。点击右上角折叠按钮后，挂件会缩成 Token 小胶囊并贴到最近的左/右屏幕边缘；再次点击小胶囊即可恢复。展开/折叠状态和位置会在重启后保留。
 
 ## 构建 macOS App
 
@@ -72,7 +73,7 @@ xcode-select --install
 dist/Sub2API Usage Widget.app
 ```
 
-你可以把这个 App 复制到 `/Applications` 或任意目录，然后双击启动。当前 App 是轻量封装，内部仍会调用打包进去的 `fetch-usage.mjs`，所以机器上仍需要安装 Node.js 18+。
+你可以把这个 App 复制到 `/Applications` 或任意目录，然后双击启动。当前 App 已经是纯原生取数，运行时不再需要 Node.js。
 
 ## 登录后自动启动
 
@@ -114,9 +115,9 @@ launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.abnerchen.sub2a
 ~/Library/Application Support/Sub2APIUsageWidget/logs
 ```
 
-## 测试取数
+## 测试取数脚本
 
-直接运行取数脚本：
+原生 App 已经不再依赖 Node.js。仓库中仍保留旧取数脚本，作为兼容性和参考测试目标：
 
 ```bash
 node sub2api-usage.widget/scripts/fetch-usage.mjs
@@ -153,4 +154,4 @@ node --test sub2api-usage.widget/test/fetch-usage.test.mjs
 
 仓库中仍保留了 Übersicht 版本入口 `sub2api-usage.widget/index.jsx`。不过推荐使用原生挂件，因为它在当前 macOS 上更稳定，并支持首次配置弹窗、自启动和拖动。
 
-当前 App 是轻量封装版。未来如果要做完全原生版，可以把 API 取数和 token 刷新逻辑迁移到 Swift 中，进一步移除 Node.js 依赖。
+当前 App 使用 Swift `URLSession` 直接取数，并通过 macOS Keychain 保存密钥。

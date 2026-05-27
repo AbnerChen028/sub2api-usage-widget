@@ -1,5 +1,6 @@
 import Cocoa
 import Darwin
+import Security
 
 struct UsagePayload: Decodable {
     let ok: Bool
@@ -13,6 +14,47 @@ struct UsagePayload: Decodable {
     let error: String?
 }
 
+struct UsageStats {
+    let totalRequests: Double
+    let totalTokens: Double
+    let totalCacheTokens: Double
+    let totalActualCost: Double
+}
+
+struct AuthResult {
+    let accessToken: String?
+    let refreshToken: String?
+    let requires2FA: Bool
+}
+
+enum UsageClientError: LocalizedError {
+    case needsCredentials(String)
+    case invalidBaseUrl
+    case requestFailed(Int, String)
+    case invalidResponse(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .needsCredentials(let message):
+            return message
+        case .invalidBaseUrl:
+            return "服务地址格式不正确，请重新输入。"
+        case .requestFailed(let status, let body):
+            if body.isEmpty {
+                return "接口返回 \(status)。"
+            }
+            return "接口返回 \(status)：\(String(body.prefix(160)))"
+        case .invalidResponse(let message):
+            return message
+        }
+    }
+
+    var needsCredentials: Bool {
+        if case .needsCredentials = self { return true }
+        return false
+    }
+}
+
 enum WidgetDisplayMode {
     case expanded
     case collapsed
@@ -23,6 +65,7 @@ final class WidgetStateStore {
         static let isCollapsed = "isCollapsed"
         static let expandedFrame = "expandedFrame"
         static let collapsedFrame = "collapsedFrame"
+        static let refreshIntervalMinutes = "refreshIntervalMinutes"
     }
 
     static let shared = WidgetStateStore()
@@ -49,6 +92,17 @@ final class WidgetStateStore {
         save(frame, forKey: Keys.collapsedFrame)
     }
 
+    var refreshIntervalMinutes: Int {
+        get {
+            let value = defaults.integer(forKey: Keys.refreshIntervalMinutes)
+            if value == 0 { return 5 }
+            return min(max(value, 1), 120)
+        }
+        set {
+            defaults.set(min(max(newValue, 1), 120), forKey: Keys.refreshIntervalMinutes)
+        }
+    }
+
     private func rect(forKey key: String) -> NSRect? {
         guard let string = defaults.string(forKey: key) else { return nil }
         let rect = NSRectFromString(string)
@@ -61,27 +115,282 @@ final class WidgetStateStore {
     }
 }
 
-enum WidgetRefreshError: LocalizedError {
-    case emptyOutput
-    case invalidJSON(String)
+enum KeychainStore {
+    private static let service = "sub2api-usage-widget"
 
-    var errorDescription: String? {
-        switch self {
-        case .emptyOutput:
-            return "刷新没有返回数据。请双击卡片重新刷新。"
-        case .invalidJSON(let output):
-            let text = output.trimmingCharacters(in: .whitespacesAndNewlines)
-            if text.isEmpty {
-                return "刷新没有返回数据。请双击卡片重新刷新。"
-            }
-            return "刷新返回格式异常：\(String(text.prefix(180)))"
+    static func read(account: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess, let data = item as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func write(account: String, value: String) throws {
+        let data = Data(value.utf8)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+        ]
+
+        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if updateStatus == errSecSuccess { return }
+        if updateStatus != errSecItemNotFound {
+            throw NSError(domain: "Sub2APIUsageWidget", code: Int(updateStatus), userInfo: [NSLocalizedDescriptionKey: "Keychain 更新失败：\(updateStatus)"])
         }
+
+        var addQuery = query
+        addQuery[kSecValueData as String] = data
+        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        if addStatus != errSecSuccess {
+            throw NSError(domain: "Sub2APIUsageWidget", code: Int(addStatus), userInfo: [NSLocalizedDescriptionKey: "Keychain 保存失败：\(addStatus)"])
+        }
+    }
+
+    static func delete(account: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+}
+
+final class Sub2APIUsageClient {
+    func fetchTodayUsage() async throws -> UsagePayload {
+        let day = Self.shanghaiDay()
+        let fetchedAt = Self.isoNow()
+        let baseUrl = try resolveBaseUrl()
+        let stats = try await fetchStatsWithAuth(day: day, baseUrl: baseUrl)
+        return UsagePayload(
+            ok: true,
+            day: day,
+            fetchedAt: fetchedAt,
+            totalRequests: stats.totalRequests,
+            totalTokens: stats.totalTokens,
+            totalCacheTokens: stats.totalCacheTokens,
+            totalActualCost: stats.totalActualCost,
+            needsCredentials: false,
+            error: nil
+        )
+    }
+
+    private func fetchStatsWithAuth(day: String, baseUrl: String) async throws -> UsageStats {
+        if let accessToken = KeychainStore.read(account: "access_token") {
+            do {
+                return try await fetchStats(token: accessToken, day: day, baseUrl: baseUrl)
+            } catch {
+                if !Self.isAuthorizationError(error) { throw error }
+            }
+        }
+
+        if let refreshToken = KeychainStore.read(account: "refresh_token") {
+            do {
+                let refreshed = try await refreshAccessToken(baseUrl: baseUrl, refreshToken: refreshToken)
+                try saveTokens(refreshed)
+                if let accessToken = refreshed.accessToken {
+                    return try await fetchStats(token: accessToken, day: day, baseUrl: baseUrl)
+                }
+            } catch {
+                if !Self.isAuthorizationError(error) { throw error }
+            }
+        }
+
+        guard let email = KeychainStore.read(account: "email"), let password = KeychainStore.read(account: "password"), !email.isEmpty, !password.isEmpty else {
+            throw UsageClientError.needsCredentials("缺少 Sub2API 登录凭据。请输入服务地址、邮箱和密码。")
+        }
+
+        let loginResult: AuthResult
+        do {
+            loginResult = try await login(baseUrl: baseUrl, email: email, password: password)
+        } catch {
+            throw UsageClientError.needsCredentials("登录失败，请重新输入 Sub2API 邮箱和密码。(\(error.localizedDescription))")
+        }
+        if loginResult.requires2FA {
+            throw UsageClientError.needsCredentials("当前账号开启了 2FA，小组件暂不支持独立完成二次验证。建议为挂件准备一个只读管理员账号。")
+        }
+        guard let accessToken = loginResult.accessToken else {
+            throw UsageClientError.needsCredentials("登录成功但没有返回 access_token，请重新确认账号权限。")
+        }
+        try saveTokens(loginResult)
+        return try await fetchStats(token: accessToken, day: day, baseUrl: baseUrl)
+    }
+
+    private func resolveBaseUrl() throws -> String {
+        guard let saved = KeychainStore.read(account: "base_url") else {
+            throw UsageClientError.needsCredentials("缺少 Sub2API 服务地址。请输入服务地址、邮箱和密码。")
+        }
+        let normalized = Self.normalizeBaseUrl(saved)
+        guard !normalized.isEmpty, URL(string: normalized) != nil else {
+            throw UsageClientError.needsCredentials("服务地址格式不正确，请重新输入。")
+        }
+        return normalized
+    }
+
+    private func saveTokens(_ auth: AuthResult) throws {
+        if let accessToken = auth.accessToken, !accessToken.isEmpty {
+            try KeychainStore.write(account: "access_token", value: accessToken)
+        }
+        if let refreshToken = auth.refreshToken, !refreshToken.isEmpty {
+            try KeychainStore.write(account: "refresh_token", value: refreshToken)
+        }
+    }
+
+    private func fetchStats(token: String, day: String, baseUrl: String) async throws -> UsageStats {
+        do {
+            return try Self.extractStats(from: await requestJSON(url: statsUrl(day: day, baseUrl: baseUrl, mode: "range"), token: token))
+        } catch {
+            if Self.isAuthorizationError(error) { throw error }
+            return try Self.extractStats(from: await requestJSON(url: statsUrl(day: day, baseUrl: baseUrl, mode: "period"), token: token))
+        }
+    }
+
+    private func statsUrl(day: String, baseUrl: String, mode: String) throws -> URL {
+        guard var components = URLComponents(string: "\(Self.normalizeBaseUrl(baseUrl))/api/v1/usage/stats") else {
+            throw UsageClientError.invalidBaseUrl
+        }
+        if mode == "period" {
+            components.queryItems = [URLQueryItem(name: "period", value: "today")]
+        } else {
+            components.queryItems = [
+                URLQueryItem(name: "start_date", value: day),
+                URLQueryItem(name: "end_date", value: day),
+            ]
+        }
+        guard let url = components.url else { throw UsageClientError.invalidBaseUrl }
+        return url
+    }
+
+    private func requestJSON(url: URL, token: String) async throws -> Any {
+        var request = URLRequest(url: url)
+        request.setValue("application/json", forHTTPHeaderField: "accept")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "authorization")
+        return try await sendJSON(request)
+    }
+
+    private func login(baseUrl: String, email: String, password: String) async throws -> AuthResult {
+        try await requestAuth(baseUrl: baseUrl, path: "/auth/login", body: ["email": email, "password": password])
+    }
+
+    private func refreshAccessToken(baseUrl: String, refreshToken: String) async throws -> AuthResult {
+        try await requestAuth(baseUrl: baseUrl, path: "/auth/refresh", body: ["refresh_token": refreshToken])
+    }
+
+    private func requestAuth(baseUrl: String, path: String, body: [String: String]) async throws -> AuthResult {
+        guard let url = URL(string: "\(Self.normalizeBaseUrl(baseUrl))/api/v1\(path)") else {
+            throw UsageClientError.invalidBaseUrl
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "accept")
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return try Self.extractAuth(from: await sendJSON(request))
+    }
+
+    private func sendJSON(_ request: URLRequest) async throws -> Any {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw UsageClientError.invalidResponse("接口没有返回有效 HTTP 响应。")
+        }
+        if !(200...299).contains(httpResponse.statusCode) {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw UsageClientError.requestFailed(httpResponse.statusCode, body)
+        }
+        return try JSONSerialization.jsonObject(with: data)
+    }
+
+    private static func extractAuth(from payload: Any) throws -> AuthResult {
+        let object = unwrapDataEnvelope(payload)
+        let accessToken = stringValue(object["access_token"])
+        let refreshToken = stringValue(object["refresh_token"])
+        let requires2FA = boolValue(object["requires_2fa"])
+        return AuthResult(accessToken: accessToken, refreshToken: refreshToken, requires2FA: requires2FA)
+    }
+
+    private static func extractStats(from payload: Any) throws -> UsageStats {
+        let object = unwrapDataEnvelope(payload)
+        return UsageStats(
+            totalRequests: doubleValue(object["total_requests"]),
+            totalTokens: doubleValue(object["total_tokens"]),
+            totalCacheTokens: doubleValue(object["total_cache_tokens"]),
+            totalActualCost: doubleValue(object["total_actual_cost"])
+        )
+    }
+
+    private static func unwrapDataEnvelope(_ payload: Any) -> [String: Any] {
+        guard let object = payload as? [String: Any] else { return [:] }
+        if let code = object["code"], let intCode = code as? Int, intCode != 0 {
+            return object
+        }
+        if let data = object["data"] as? [String: Any] {
+            return data
+        }
+        return object
+    }
+
+    private static func doubleValue(_ value: Any?) -> Double {
+        if let number = value as? NSNumber { return number.doubleValue }
+        if let string = value as? String { return Double(string) ?? 0 }
+        return 0
+    }
+
+    private static func stringValue(_ value: Any?) -> String? {
+        if let string = value as? String, !string.isEmpty { return string }
+        return nil
+    }
+
+    private static func boolValue(_ value: Any?) -> Bool {
+        if let bool = value as? Bool { return bool }
+        if let number = value as? NSNumber { return number.boolValue }
+        return false
+    }
+
+    private static func isAuthorizationError(_ error: Error) -> Bool {
+        if case UsageClientError.requestFailed(let status, _) = error {
+            return status == 401 || status == 403
+        }
+        return false
+    }
+
+    static func normalizeBaseUrl(_ value: String) -> String {
+        var text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        while text.hasSuffix("/") {
+            text.removeLast()
+        }
+        return text
+    }
+
+    static func shanghaiDay(date: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    static func isoNow(date: Date = Date()) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
 }
 
 final class WidgetContentView: NSView {
     weak var controller: WidgetWindowController?
-    private let scriptPath: String
+    private let usageClient = Sub2APIUsageClient()
+    private let stateStore = WidgetStateStore.shared
     private var timer: Timer?
     private var payload = UsagePayload(ok: false, day: "今日", fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, needsCredentials: nil, error: "正在刷新...")
     private var usageStatus = ("正在刷新今日用量", NSColor.systemGreen)
@@ -94,15 +403,12 @@ final class WidgetContentView: NSView {
     private var collapsedInteractionEnabledAt = Date.distantPast
     private let collapseButtonSize: CGFloat = 32
 
-    init(frame: NSRect, scriptPath: String, displayMode: WidgetDisplayMode) {
-        self.scriptPath = scriptPath
+    init(frame: NSRect, displayMode: WidgetDisplayMode) {
         self.displayMode = displayMode
         super.init(frame: frame)
         wantsLayer = true
+        startTimer()
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
-            self?.refresh()
-        }
     }
 
     required init?(coder: NSCoder) {
@@ -113,6 +419,23 @@ final class WidgetContentView: NSView {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: "配置...", action: #selector(openConfiguration(_:)), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "立即刷新", action: #selector(refreshFromMenu(_:)), keyEquivalent: ""))
+        return menu
+    }
+
+    @objc private func openConfiguration(_ sender: Any?) {
+        promptForCredentials()
+    }
+
+    @objc private func refreshFromMenu(_ sender: Any?) {
+        payload = UsagePayload(ok: false, day: "今日", fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, needsCredentials: nil, error: "正在刷新...")
+        needsDisplay = true
+        refresh()
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -229,46 +552,38 @@ final class WidgetContentView: NSView {
         needsDisplay = true
     }
 
+    private func startTimer() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: TimeInterval(stateStore.refreshIntervalMinutes * 60), repeats: true) { [weak self] _ in
+            self?.refresh()
+        }
+    }
+
     private func refresh() {
-        DispatchQueue.global(qos: .utility).async { [scriptPath] in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments = ["-lc", "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin node \(shellQuote(scriptPath))"]
-
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = pipe
-
+        Task.detached(priority: .utility) { [usageClient] in
             do {
-                try process.run()
-                process.waitUntilExit()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
-                guard !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                    throw WidgetRefreshError.emptyOutput
-                }
-                let nextPayload: UsagePayload
-                do {
-                    nextPayload = try JSONDecoder().decode(UsagePayload.self, from: data)
-                } catch {
-                    throw WidgetRefreshError.invalidJSON(output)
-                }
-                DispatchQueue.main.async {
-                    self.payload = nextPayload
-                    if nextPayload.ok {
-                        self.usageStatus = Self.randomUsageStatus(for: nextPayload.totalTokens ?? 0)
-                    }
-                    self.needsDisplay = true
-                    if nextPayload.ok != true && nextPayload.needsCredentials == true {
-                        self.promptForCredentials()
-                    }
+                let nextPayload = try await usageClient.fetchTodayUsage()
+                await MainActor.run {
+                    self.applyPayload(nextPayload)
                 }
             } catch {
-                DispatchQueue.main.async {
-                    self.payload = UsagePayload(ok: false, day: nil, fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, needsCredentials: nil, error: error.localizedDescription)
-                    self.needsDisplay = true
+                let usageError = error as? UsageClientError
+                let nextPayload = UsagePayload(ok: false, day: Sub2APIUsageClient.shanghaiDay(), fetchedAt: Sub2APIUsageClient.isoNow(), totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, needsCredentials: usageError?.needsCredentials == true, error: error.localizedDescription)
+                await MainActor.run {
+                    self.applyPayload(nextPayload)
                 }
             }
+        }
+    }
+
+    private func applyPayload(_ nextPayload: UsagePayload) {
+        payload = nextPayload
+        if nextPayload.ok {
+            usageStatus = Self.randomUsageStatus(for: nextPayload.totalTokens ?? 0)
+        }
+        needsDisplay = true
+        if nextPayload.ok != true && nextPayload.needsCredentials == true {
+            promptForCredentials()
         }
     }
 
@@ -276,20 +591,27 @@ final class WidgetContentView: NSView {
         guard !isCredentialPromptVisible else { return }
         isCredentialPromptVisible = true
 
-        let baseUrlField = NSTextField(frame: NSRect(x: 0, y: 68, width: 300, height: 24))
+        let baseUrlField = NSTextField(frame: NSRect(x: 0, y: 102, width: 300, height: 24))
         baseUrlField.placeholderString = "服务地址，例如 https://sub2api.example.com"
-        let emailField = NSTextField(frame: NSRect(x: 0, y: 34, width: 300, height: 24))
+        baseUrlField.stringValue = readCredential(account: "base_url") ?? ""
+        let emailField = NSTextField(frame: NSRect(x: 0, y: 68, width: 300, height: 24))
         emailField.placeholderString = "邮箱"
-        let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        emailField.stringValue = readCredential(account: "email") ?? ""
+        let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 34, width: 300, height: 24))
         passwordField.placeholderString = "密码"
-        let stack = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 92))
+        passwordField.stringValue = readCredential(account: "password") ?? ""
+        let intervalField = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        intervalField.placeholderString = "刷新间隔（分钟，1-120）"
+        intervalField.stringValue = String(stateStore.refreshIntervalMinutes)
+        let stack = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 126))
         stack.addSubview(baseUrlField)
         stack.addSubview(emailField)
         stack.addSubview(passwordField)
+        stack.addSubview(intervalField)
 
         let alert = NSAlert()
         alert.messageText = "配置 Sub2API"
-        alert.informativeText = "服务地址和登录凭据会保存到 macOS Keychain。地址或密码修改、登录失效时，会再次提示你更新。"
+        alert.informativeText = "服务地址和登录凭据会保存到 macOS Keychain。刷新间隔会保存在本机配置中。"
         alert.accessoryView = stack
         alert.addButton(withTitle: "保存并刷新")
         alert.addButton(withTitle: "取消")
@@ -303,6 +625,7 @@ final class WidgetContentView: NSView {
         let baseUrl = normalizedBaseUrl(baseUrlField.stringValue)
         let email = emailField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let password = passwordField.stringValue
+        let refreshInterval = min(max(Int(intervalField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)) ?? stateStore.refreshIntervalMinutes, 1), 120)
         guard !baseUrl.isEmpty, !email.isEmpty, !password.isEmpty else {
             payload = UsagePayload(ok: false, day: nil, fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, needsCredentials: true, error: "服务地址、邮箱和密码不能为空。双击卡片可重新输入。")
             needsDisplay = true
@@ -313,8 +636,10 @@ final class WidgetContentView: NSView {
             try saveCredential(account: "base_url", value: baseUrl)
             try saveCredential(account: "email", value: email)
             try saveCredential(account: "password", value: password)
+            stateStore.refreshIntervalMinutes = refreshInterval
             deleteCredential(account: "access_token")
             deleteCredential(account: "refresh_token")
+            startTimer()
             payload = UsagePayload(ok: false, day: "今日", fetchedAt: nil, totalRequests: nil, totalTokens: nil, totalCacheTokens: nil, totalActualCost: nil, needsCredentials: nil, error: "正在刷新...")
             needsDisplay = true
             refresh()
@@ -325,30 +650,19 @@ final class WidgetContentView: NSView {
     }
 
     private func normalizedBaseUrl(_ value: String) -> String {
-        var text = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        while text.hasSuffix("/") {
-            text.removeLast()
-        }
-        return text
+        Sub2APIUsageClient.normalizeBaseUrl(value)
     }
 
     private func saveCredential(account: String, value: String) throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = ["add-generic-password", "-U", "-s", "sub2api-usage-widget", "-a", account, "-w", value]
-        try process.run()
-        process.waitUntilExit()
-        if process.terminationStatus != 0 {
-            throw NSError(domain: "Sub2APIUsageWidget", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: "security add-generic-password 失败"])
-        }
+        try KeychainStore.write(account: account, value: value)
+    }
+
+    private func readCredential(account: String) -> String? {
+        KeychainStore.read(account: account)
     }
 
     private func deleteCredential(account: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = ["delete-generic-password", "-s", "sub2api-usage-widget", "-a", account]
-        try? process.run()
-        process.waitUntilExit()
+        KeychainStore.delete(account: account)
     }
 
     private func drawMetric(label: String, value: String, y: CGFloat, valueColor: NSColor = .white) {
@@ -524,7 +838,7 @@ final class WidgetWindowController {
 
     private var displayMode: WidgetDisplayMode
 
-    init(scriptPath: String) {
+    init() {
         let defaultExpandedFrame = NSRect(x: 28, y: 500, width: expandedSize.width, height: expandedSize.height)
         displayMode = stateStore.isCollapsed ? .collapsed : .expanded
         let defaultCollapsedFrame = Self.collapsedFrame(from: defaultExpandedFrame, size: collapsedSize, edgeInset: edgeInset)
@@ -533,7 +847,7 @@ final class WidgetWindowController {
             : stateStore.expandedFrame(default: defaultExpandedFrame)
 
         window = DraggableWidgetWindow(contentRect: initialFrame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        contentView = WidgetContentView(frame: NSRect(x: 0, y: 0, width: initialFrame.width, height: initialFrame.height), scriptPath: scriptPath, displayMode: displayMode)
+        contentView = WidgetContentView(frame: NSRect(x: 0, y: 0, width: initialFrame.width, height: initialFrame.height), displayMode: displayMode)
         contentView.controller = self
         window.widgetController = self
         window.contentView = contentView
@@ -637,7 +951,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installEditMenu()
-        let controller = WidgetWindowController(scriptPath: resolveFetchScriptPath())
+        let controller = WidgetWindowController()
         controller.show()
         widgetController = controller
     }
@@ -678,23 +992,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-func resolveFetchScriptPath() -> String {
-    if let argument = CommandLine.arguments.dropFirst().first, !argument.isEmpty {
-        return argument
-    }
-
-    if let resourcePath = Bundle.main.resourcePath {
-        let bundledScript = URL(fileURLWithPath: resourcePath)
-            .appendingPathComponent("sub2api-usage.widget/scripts/fetch-usage.mjs")
-            .path
-        if FileManager.default.fileExists(atPath: bundledScript) {
-            return bundledScript
-        }
-    }
-
-    return ""
-}
-
 func acquireSingleInstanceLock() -> Int32? {
     let path = (NSTemporaryDirectory() as NSString).appendingPathComponent("com.abnerchen.sub2api-usage-widget.lock")
     let fd = open(path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
@@ -708,10 +1005,6 @@ func acquireSingleInstanceLock() -> Int32? {
     }
 
     return fd
-}
-
-func shellQuote(_ value: String) -> String {
-    "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }
 
 let singleInstanceLock = acquireSingleInstanceLock()

@@ -11,11 +11,10 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 "$ROOT_DIR/scripts/build-native-widget.sh"
 
 rm -rf "$APP_DIR"
-mkdir -p "$MACOS_DIR" "$RESOURCES_DIR/sub2api-usage.widget/scripts"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 cp "$ROOT_DIR/native-widget/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$ROOT_DIR/native-widget/Sub2APIUsageWidget" "$MACOS_DIR/Sub2APIUsageWidget"
-cp "$ROOT_DIR/sub2api-usage.widget/scripts/fetch-usage.mjs" "$RESOURCES_DIR/sub2api-usage.widget/scripts/fetch-usage.mjs"
 
 chmod +x "$MACOS_DIR/Sub2APIUsageWidget"
 plutil -lint "$CONTENTS_DIR/Info.plist" >/dev/null

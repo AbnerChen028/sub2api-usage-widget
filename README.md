@@ -15,7 +15,6 @@ It logs in directly through the Sub2API API, stores secrets in macOS Keychain, a
 ## Requirements
 
 - macOS
-- Node.js 18+ available as `node`
 - Swift toolchain / Xcode Command Line Tools for the native widget
 - A Sub2API-compatible admin site that exposes:
   - `GET /api/v1/usage/stats`
@@ -30,12 +29,13 @@ xcode-select --install
 
 ## Configure
 
-On first launch, the native widget prompts for your Sub2API service address, email, and password in a macOS dialog.
+On first launch, the native widget prompts for your Sub2API service address, email, password, and refresh interval in a macOS dialog.
 The service address is your Sub2API site origin, for example `https://your-sub2api.example.com`.
 
 The service address and credentials are stored in Keychain service `sub2api-usage-widget`.
 The widget then logs in directly, stores `access_token` and `refresh_token` in the same Keychain service,
 and refreshes tokens automatically. Secrets are not written to the repository config.
+The refresh interval is stored locally in app preferences, defaults to 5 minutes, and is clamped to 1-120 minutes.
 
 Advanced users can still create `sub2api-usage.widget/config.json` with a `baseUrl` value to override the Keychain service address.
 
@@ -56,7 +56,7 @@ Build and start the native widget for local development:
 ./scripts/run-native-widget.sh
 ```
 
-The widget refreshes every 5 minutes. You can drag it by its background, double-click it to refresh immediately, click the top-right collapse control to tuck it against the nearest left/right screen edge, and click the compact `T` icon to restore it. The expanded/collapsed state and position are remembered across restarts.
+The widget refreshes on your configured interval. You can drag it by its background, double-click it to refresh immediately, click the top-right collapse control to tuck it against the nearest left/right screen edge, and click the compact token pill to restore it. The expanded/collapsed state and position are remembered across restarts.
 
 ## Build the macOS App
 
@@ -72,7 +72,7 @@ The app is created at:
 dist/Sub2API Usage Widget.app
 ```
 
-You can copy the app to `/Applications` or any folder and launch it with Finder. This lightweight app still requires Node.js 18+ on the machine because it runs the bundled `fetch-usage.mjs` script internally.
+You can copy the app to `/Applications` or any folder and launch it with Finder. The app is fully native and does not require Node.js at runtime.
 
 ## Start Automatically After Login
 
@@ -112,9 +112,9 @@ Launch logs are written to:
 ~/Library/Application Support/Sub2APIUsageWidget/logs
 ```
 
-## Test Fetching
+## Test Fetching Script
 
-Run the fetch script directly:
+The native app no longer uses Node.js. The repository still keeps the old fetch script as a compatibility/reference test target:
 
 ```bash
 node sub2api-usage.widget/scripts/fetch-usage.mjs
@@ -151,4 +151,4 @@ Each refresh picks a random friendly message from the current threshold bucket.
 
 This repository also contains an Übersicht-compatible widget entry in `sub2api-usage.widget/index.jsx`, but the native widget is the recommended runner because it is more reliable on current macOS releases.
 
-The current app bundle is intentionally lightweight. A future fully native version can move the API fetch and auth refresh logic into Swift and remove the Node.js requirement.
+The current app bundle fetches usage directly in Swift with `URLSession` and stores secrets in macOS Keychain.
