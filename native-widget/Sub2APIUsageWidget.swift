@@ -190,10 +190,10 @@ final class WidgetContentView: NSView {
         background.lineWidth = 1.4
         background.stroke()
 
-        drawText("今日Token用量", x: 20, y: 18, width: 230, height: 28, size: 25, weight: .bold, color: .white)
-        drawCircle(x: bounds.width - 42, y: 29, radius: 8, color: payload.ok ? .systemGreen : .systemPink)
+        drawText("今日Token用量", x: 20, y: 20, width: 230, height: 28, size: 25, weight: .bold, color: .white)
+        drawCircle(x: bounds.width - 43, y: 26, radius: 8, color: payload.ok ? .systemGreen : .systemPink)
         drawCollapseButton()
-        drawText("\(payload.day ?? "今日") · \(formatTime(payload.fetchedAt)) 更新", x: 21, y: 52, width: bounds.width - 42, height: 18, size: 12, weight: .regular, color: NSColor(calibratedWhite: 0.82, alpha: 0.82))
+        drawText("\(payload.day ?? "今日") · \(formatTime(payload.fetchedAt)) 更新", x: 21, y: 55, width: bounds.width - 42, height: 18, size: 12, weight: .regular, color: NSColor(calibratedWhite: 0.82, alpha: 0.82))
 
         if payload.ok {
             drawSeparator(y: 80)
@@ -353,7 +353,7 @@ final class WidgetContentView: NSView {
     }
 
     private var collapseButtonRect: NSRect {
-        NSRect(x: bounds.width - 78, y: 17, width: collapseButtonSize, height: collapseButtonSize)
+        NSRect(x: bounds.width - 78, y: 18, width: collapseButtonSize, height: collapseButtonSize)
     }
 
     private var collapseButtonHitRect: NSRect {
@@ -368,7 +368,7 @@ final class WidgetContentView: NSView {
         NSColor(calibratedWhite: 1, alpha: 0.28).setStroke()
         path.lineWidth = 1
         path.stroke()
-        drawText("‹", x: rect.minX, y: rect.minY - 1, width: rect.width, height: rect.height, size: 23, weight: .semibold, color: NSColor(calibratedWhite: 1, alpha: 0.82), alignment: .center)
+        drawText("‹", x: rect.minX, y: rect.minY, width: rect.width, height: rect.height, size: 23, weight: .semibold, color: NSColor(calibratedWhite: 1, alpha: 0.82), alignment: .center)
     }
 
     private func drawCollapsed() {
@@ -381,8 +381,8 @@ final class WidgetContentView: NSView {
         background.stroke()
 
         let statusColor = payload.ok ? usageStatus.1 : NSColor.systemPink
-        drawCircle(x: 13, y: bounds.midY - 5, radius: 5, color: statusColor)
-        drawText(compact(payload.totalTokens), x: 30, y: 13, width: bounds.width - 42, height: 25, size: 20, weight: .bold, color: .white, alignment: .right)
+        drawCircle(x: 24, y: bounds.midY - 5, radius: 5, color: statusColor)
+        drawText(compact(payload.totalTokens), x: 46, y: 13, width: bounds.width - 58, height: 25, size: 20, weight: .bold, color: .white, alignment: .left)
     }
 
     private static func randomUsageStatus(for tokenCount: Double) -> (String, NSColor) {
