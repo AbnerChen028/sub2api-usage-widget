@@ -119,52 +119,50 @@ enum KeychainStore {
     private static let service = "sub2api-usage-widget"
 
     static func read(account: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = ["find-generic-password", "-s", service, "-a", account, "-w"]
 
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let value = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            guard let value, !value.isEmpty, value != "missing value", value != "null", value != "undefined" else { return nil }
+            return value
+        } catch {
+            return nil
+        }
     }
 
     static func write(account: String, value: String) throws {
-        let data = Data(value.utf8)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        let attributes: [String: Any] = [
-            kSecValueData as String: data,
-        ]
-
-        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        if updateStatus == errSecSuccess { return }
-        if updateStatus != errSecItemNotFound {
-            throw NSError(domain: "Sub2APIUsageWidget", code: Int(updateStatus), userInfo: [NSLocalizedDescriptionKey: "Keychain 更新失败：\(updateStatus)"])
-        }
-
-        var addQuery = query
-        addQuery[kSecValueData as String] = data
-        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-        if addStatus != errSecSuccess {
-            throw NSError(domain: "Sub2APIUsageWidget", code: Int(addStatus), userInfo: [NSLocalizedDescriptionKey: "Keychain 保存失败：\(addStatus)"])
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = ["add-generic-password", "-U", "-s", service, "-a", account, "-w", value]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        if process.terminationStatus != 0 {
+            throw NSError(domain: "Sub2APIUsageWidget", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: "Keychain 保存失败"])
         }
     }
 
     static func delete(account: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        SecItemDelete(query as CFDictionary)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = ["delete-generic-password", "-s", service, "-a", account]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try? process.run()
+        process.waitUntilExit()
     }
 }
 
