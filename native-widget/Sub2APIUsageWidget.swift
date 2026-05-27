@@ -88,6 +88,7 @@ final class WidgetContentView: NSView {
     private var isCredentialPromptVisible = false
     private var displayMode: WidgetDisplayMode
     private var isDragging = false
+    private var isCollapseButtonPressed = false
     private var collapsedDragStartMouse: NSPoint?
     private var collapsedDragStartOrigin: NSPoint?
     private let collapseButtonSize: CGFloat = 32
@@ -122,7 +123,8 @@ final class WidgetContentView: NSView {
         }
 
         if collapseButtonHitRect.contains(convert(event.locationInWindow, from: nil)) {
-            controller?.collapse()
+            isCollapseButtonPressed = true
+            needsDisplay = true
             return
         }
 
@@ -149,6 +151,16 @@ final class WidgetContentView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if isCollapseButtonPressed {
+            let shouldCollapse = displayMode == .expanded && collapseButtonHitRect.contains(convert(event.locationInWindow, from: nil))
+            isCollapseButtonPressed = false
+            needsDisplay = true
+            if shouldCollapse {
+                controller?.collapse()
+            }
+            return
+        }
+
         if displayMode == .collapsed {
             if isDragging {
                 controller?.snapCollapsedWindowToNearestSide()
